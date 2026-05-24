@@ -140,49 +140,91 @@ export class CharacterTools {
         },
       },
       {
-        name: 'add-actor-items',
+        name: 'manage-world-items',
         description:
-          'Add one or more freshly-authored Item documents (talents, actions, powers, equipment, etc.) to an existing actor. Items are constructed from the supplied data — no compendium lookup is performed. Each item requires a non-empty "name" and a "type" valid for the active game system (e.g. Cosmere RPG: "action", "talent", "power", "weapon", "armor", "equipment", "loot", "ancestry", "culture", "path", "specialty", "trait", "injury", "connection", "goal", "talent_tree"). Pass system-specific data via the optional "system" object — Foundry\'s DataModel layer fills defaults and validates required sub-fields. GM-only. Returns the created item IDs so callers can update or roll them next.',
+          'Manage Item documents in Foundry VTT. Specify the operation with "action":\n' +
+          '- "create": Create world-level Items in the sidebar (not actor-attached). Good for reusable libraries. GM-only.\n' +
+          '- "list": List world-level Items with optional type/folder/name filters.\n' +
+          '- "update": Update existing world-level Items by ID. GM-only.\n' +
+          '- "add-to-actor": Create and attach Items directly to an existing actor. GM-only.',
         inputSchema: {
           type: 'object',
           properties: {
-            actorIdentifier: {
+            action: {
               type: 'string',
-              description: 'Actor name or ID to receive the items',
+              enum: ['create', 'list', 'update', 'add-to-actor'],
+              description:
+                'Operation to perform: "create" world items, "list" world items, "update" world items by id, or "add-to-actor" to attach items to an actor.',
             },
             items: {
               type: 'array',
               minItems: 1,
-              description: 'One or more items to create on the actor sheet',
+              description:
+                'Required for "create" and "add-to-actor". One or more items to create. Each item requires a name and a type valid for the active game system (e.g. "action", "talent", "weapon"). For Cosmere RPG add-to-actor, pass system-specific data via the "system" field.',
               items: {
                 type: 'object',
                 properties: {
-                  name: {
-                    type: 'string',
-                    description: 'Display name of the item',
-                  },
+                  name: { type: 'string', description: 'Display name of the item' },
                   type: {
                     type: 'string',
-                    description:
-                      'Item type valid for the active system (e.g. "action", "talent", "weapon")',
+                    description: 'Item type valid for the active system (e.g. "action", "talent", "weapon")',
                   },
                   img: {
                     type: 'string',
-                    description:
-                      'Optional icon path (e.g. "icons/svg/explosion.svg" or a system-bundled path)',
+                    description: 'Optional icon path (e.g. "icons/svg/explosion.svg")',
                   },
                   system: {
                     type: 'object',
-                    description:
-                      'System-specific data (free-form). For Cosmere actions: { activation: { type: "utility", cost: { value: 1, type: "act" }, consume: [{ type: "resource", resource: "foc", value: { min: 2, max: 2 } }] }, description: { value: "<p>HTML</p>" } }',
+                    description: 'System-specific data (free-form). Passed through to Foundry\'s DataModel layer.',
                     additionalProperties: true,
                   },
                 },
                 required: ['name', 'type'],
               },
             },
+            updates: {
+              type: 'array',
+              minItems: 1,
+              description:
+                'Required for "update". One or more item patches. Each entry must include "id" plus at least one field to change (name, img, system, folder).',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: 'ID of the world Item to update' },
+                  name: { type: 'string', description: 'New display name' },
+                  img: { type: 'string', description: 'New icon path' },
+                  system: {
+                    type: 'object',
+                    description: 'System-specific fields to update (merged into existing system data)',
+                    additionalProperties: true,
+                  },
+                  folder: {
+                    type: 'string',
+                    description: 'Move item into this folder (name or ID). Created if absent.',
+                  },
+                },
+                required: ['id'],
+              },
+            },
+            folder: {
+              type: 'string',
+              description:
+                'For "create": folder name/ID to place items in (created if absent). For "list": filter to items inside this folder.',
+            },
+            type: {
+              type: 'string',
+              description: 'For "list": filter by item type (e.g. "action", "talent"). Omit to return all types.',
+            },
+            nameFilter: {
+              type: 'string',
+              description: 'For "list": case-insensitive substring match on item name.',
+            },
+            actorIdentifier: {
+              type: 'string',
+              description: 'For "add-to-actor": actor name or ID to receive the items.',
+            },
           },
-          required: ['actorIdentifier', 'items'],
+          required: ['action'],
         },
       },
       {
@@ -484,6 +526,125 @@ export class CharacterTools {
       throw new Error(
         `Failed to add items to "${actorIdentifier}": ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  async handleUpdateWorldItems(args: any): Promise<any> {
+    const updateEntrySchema = z.object({
+      id: z.string().min(1, 'Item id cannot be empty'),
+      name: z.string().optional(),
+      img: z.string().optional(),
+      system: z.record(z.any()).optional(),
+      folder: z.string().optional(),
+    });
+
+    const schema = z.object({
+      updates: z.array(updateEntrySchema).min(1, 'At least one update entry is required'),
+    });
+
+    const { updates } = schema.parse(args);
+
+    this.logger.info('Updating world items', {
+      count: updates.length,
+      ids: updates.map(u => u.id),
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.updateWorldItems', { updates });
+
+      this.logger.debug('Successfully updated world items', { count: result.updated?.length ?? 0 });
+
+      return result;
+
+    } catch (error) {
+      this.logger.error('Failed to update world items', error);
+      throw new Error(`Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async handleListWorldItems(args: any): Promise<any> {
+    const schema = z.object({
+      type: z.string().optional(),
+      folder: z.string().optional(),
+      nameFilter: z.string().optional(),
+    });
+
+    const { type, folder, nameFilter } = schema.parse(args);
+
+    this.logger.info('Listing world items', { type: type ?? null, folder: folder ?? null, nameFilter: nameFilter ?? null });
+
+    try {
+      const items = await this.foundryClient.query('foundry-mcp-bridge.listWorldItems', {
+        ...(type !== undefined ? { type } : {}),
+        ...(folder !== undefined ? { folder } : {}),
+        ...(nameFilter !== undefined ? { nameFilter } : {}),
+      });
+
+      this.logger.debug('Successfully listed world items', { count: items?.length ?? 0 });
+
+      return {
+        items: items ?? [],
+        total: items?.length ?? 0,
+      };
+
+    } catch (error) {
+      this.logger.error('Failed to list world items', error);
+      throw new Error(`Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async handleCreateWorldItems(args: any): Promise<any> {
+    const itemSchema = z.object({
+      name: z.string().min(1, 'Item name cannot be empty'),
+      type: z.string().min(1, 'Item type cannot be empty'),
+      img: z.string().optional(),
+      system: z.record(z.any()).optional(),
+    });
+
+    const schema = z.object({
+      items: z.array(itemSchema).min(1, 'At least one item is required'),
+      folder: z.string().optional(),
+    });
+
+    const { items, folder } = schema.parse(args);
+
+    this.logger.info('Creating world items', {
+      count: items.length,
+      folder: folder ?? null,
+      types: items.map(i => i.type),
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.createWorldItems', {
+        items,
+        folder,
+      });
+
+      this.logger.debug('Successfully created world items', {
+        folderId: result.folderId,
+        created: result.created?.length ?? 0,
+      });
+
+      return result;
+
+    } catch (error) {
+      this.logger.error('Failed to create world items', error);
+      throw new Error(`Failed to create world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async handleManageWorldItems(args: any): Promise<any> {
+    const { action } = z.object({ action: z.enum(['create', 'list', 'update', 'add-to-actor']) }).parse(args);
+
+    switch (action) {
+      case 'create':
+        return this.handleCreateWorldItems(args);
+      case 'list':
+        return this.handleListWorldItems(args);
+      case 'update':
+        return this.handleUpdateWorldItems(args);
+      case 'add-to-actor':
+        return this.handleAddActorItems(args);
     }
   }
 

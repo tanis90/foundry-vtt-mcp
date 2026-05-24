@@ -1487,8 +1487,8 @@ async function startBackend(): Promise<void> {
 
                   break;
 
-                case 'add-actor-items':
-                  result = await characterTools.handleAddActorItems(args);
+                case 'manage-world-items':
+                  result = await characterTools.handleManageWorldItems(args);
 
                   break;
 

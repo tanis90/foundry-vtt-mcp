@@ -114,6 +114,11 @@ export class QueryHandlers {
     // Item authoring on actor sheets
     CONFIG.queries[`${modulePrefix}.addActorItems`] = this.handleAddActorItems.bind(this);
 
+    // World-level item CRUD
+    CONFIG.queries[`${modulePrefix}.createWorldItems`] = this.handleCreateWorldItems.bind(this);
+    CONFIG.queries[`${modulePrefix}.listWorldItems`] = this.handleListWorldItems.bind(this);
+    CONFIG.queries[`${modulePrefix}.updateWorldItems`] = this.handleUpdateWorldItems.bind(this);
+
     // Phase 7: Token manipulation queries
     CONFIG.queries[`${modulePrefix}.move-token`] = this.handleMoveToken.bind(this);
     CONFIG.queries[`${modulePrefix}.update-token`] = this.handleUpdateToken.bind(this);
@@ -542,6 +547,7 @@ export class QueryHandlers {
         name: data.name,
         content: data.content,
         additionalPages: data.additionalPages,
+        folderName: data.folderName,
       });
     } catch (error) {
       throw new Error(
@@ -1502,4 +1508,88 @@ export class QueryHandlers {
       );
     }
   }
+
+  private async handleUpdateWorldItems(data: {
+    updates: Array<{
+      id: string;
+      name?: string;
+      img?: string;
+      system?: Record<string, any>;
+      folder?: string;
+    }>;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!Array.isArray(data?.updates) || data.updates.length === 0) {
+        throw new Error('updates array is required and must contain at least one entry');
+      }
+
+      return await this.dataAccess.updateWorldItems({ updates: data.updates });
+    } catch (error) {
+      throw new Error(`Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handleListWorldItems(data: {
+    type?: string;
+    folder?: string;
+    nameFilter?: string;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      return await this.dataAccess.listWorldItems({
+        ...(data.type !== undefined ? { type: data.type } : {}),
+        ...(data.folder !== undefined ? { folder: data.folder } : {}),
+        ...(data.nameFilter !== undefined ? { nameFilter: data.nameFilter } : {}),
+      });
+    } catch (error) {
+      throw new Error(`Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handleCreateWorldItems(data: {
+    items: Array<{
+      name: string;
+      type: string;
+      img?: string;
+      system?: Record<string, any>;
+    }>;
+    folder?: string;
+  }): Promise<any> {
+    try {
+      // SECURITY: World item creation is GM-only
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!Array.isArray(data?.items) || data.items.length === 0) {
+        throw new Error('items array is required and must contain at least one entry');
+      }
+
+      return await this.dataAccess.createWorldItems({
+        items: data.items,
+        ...(data.folder !== undefined ? { folder: data.folder } : {}),
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to create world items: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
 }
