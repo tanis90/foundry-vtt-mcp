@@ -210,10 +210,23 @@ export class SocketBridge {
         await this.handleJobCompleted(message.data);
       } else if (message.type === 'map-generation-progress') {
         this.handleProgressUpdate(message.data);
+      } else if (message.type === 'voice.state') {
+        this.handleVoiceState(message.payload || message.data || {});
       }
     } catch (error) {
       console.error(`[foundry-mcp-bridge] ERROR in handleMessage:`, error);
       this.log(`Error handling message: ${error}`);
+    }
+  }
+
+  private handleVoiceState(payload: any): void {
+    try {
+      const panel = (window as any).foundryMCPBridge?.voiceReviewPanel;
+      if (panel) {
+        panel.update(payload);
+      }
+    } catch (error) {
+      this.log(`Error handling voice state: ${error}`);
     }
   }
 

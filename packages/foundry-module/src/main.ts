@@ -4,6 +4,7 @@ import { QueryHandlers } from './queries.js';
 import { ModuleSettings } from './settings.js';
 import { CampaignHooks } from './campaign-hooks.js';
 import { ComfyUIManager } from './comfyui-manager.js';
+import { VoiceReviewPanel } from './voice-review-panel.js';
 // Connection control now handled through settings menu
 
 /**
@@ -14,6 +15,7 @@ class FoundryMCPBridge {
   private queryHandlers: QueryHandlers;
   private campaignHooks: CampaignHooks;
   public comfyuiManager: ComfyUIManager;
+  public voiceReviewPanel: VoiceReviewPanel | null = null;
   private socketBridge: SocketBridge | null = null;
   private isInitialized = false;
   private heartbeatInterval: number | null = null;
@@ -67,6 +69,16 @@ class FoundryMCPBridge {
    */
   async onReady(): Promise<void> {
     try {
+      // Initialize voice review panel for all users (or GM only)
+      if (this.isGMUser()) {
+        try {
+          this.voiceReviewPanel = new VoiceReviewPanel();
+          console.log(`[${MODULE_ID}] Voice review panel initialized`);
+        } catch (error) {
+          console.error(`[${MODULE_ID}] Failed to initialize voice review panel:`, error);
+        }
+      }
+
       // SECURITY: Silent GM-only check - non-GM users get no access and no messages
       if (!this.isGMUser()) {
         console.log(`[${MODULE_ID}] Module ready (user access restricted)`);

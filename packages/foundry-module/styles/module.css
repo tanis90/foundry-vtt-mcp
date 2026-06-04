@@ -186,6 +186,132 @@
 }
 
 /* ============================================================================ */
+/* Arcane Voice Review Panel */
+/* ============================================================================ */
+
+.arcane-voice-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  width: min(960px, calc(100vw - 560px));
+  z-index: 80;
+  font-family: var(--font-primary, 'Signika', sans-serif);
+  pointer-events: auto;
+}
+
+.arcane-voice-panel.collapsed .arcane-voice-body {
+  display: none;
+}
+
+.arcane-voice-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(30, 30, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.arcane-voice-handle:hover {
+  background: rgba(45, 45, 45, 0.95);
+}
+
+.arcane-voice-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+  flex-shrink: 0;
+}
+
+.arcane-voice-indicator.state-idle { background: #888; }
+.arcane-voice-indicator.state-recording { background: #ff4444; animation: pulse 1.2s ease-in-out infinite; }
+.arcane-voice-indicator.state-transcribing { background: #ffaa00; animation: pulse 1.2s ease-in-out infinite; }
+.arcane-voice-indicator.state-draft { background: #44aaff; }
+.arcane-voice-indicator.state-executing { background: #aa66ff; animation: pulse 1s ease-in-out infinite; }
+.arcane-voice-indicator.state-done { background: #44cc44; }
+.arcane-voice-indicator.state-error { background: #ff4444; }
+
+.arcane-voice-capsule {
+  color: #ddd;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.arcane-voice-chevron {
+  color: #888;
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+.arcane-voice-body {
+  margin-top: 6px;
+  padding: 10px 14px;
+  background: rgba(25, 25, 25, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  color: #eee;
+  font-size: 14px;
+  line-height: 1.5;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.arcane-voice-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.arcane-voice-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ccc;
+}
+
+.arcane-voice-tag.state-recording { background: rgba(255, 68, 68, 0.2); color: #ff8888; }
+.arcane-voice-tag.state-transcribing { background: rgba(255, 170, 0, 0.2); color: #ffcc66; }
+.arcane-voice-tag.state-draft { background: rgba(68, 170, 255, 0.2); color: #88ccff; }
+.arcane-voice-tag.state-executing { background: rgba(170, 102, 255, 0.2); color: #cc99ff; }
+.arcane-voice-tag.state-done { background: rgba(68, 204, 68, 0.2); color: #88ee88; }
+.arcane-voice-tag.state-error { background: rgba(255, 68, 68, 0.2); color: #ff8888; }
+
+.arcane-voice-transcript {
+  font-size: 15px;
+  color: #fff;
+  word-break: break-word;
+  margin-bottom: 6px;
+}
+
+.arcane-voice-message {
+  font-size: 13px;
+  color: #88ee88;
+  word-break: break-word;
+}
+
+.arcane-voice-error {
+  font-size: 13px;
+  color: #ff8888;
+  word-break: break-word;
+}
+
+/* ============================================================================ */
 /* Enhanced Creature Index (ECI) Style Overrides for Map Generation Settings */
 /* ============================================================================ */
 

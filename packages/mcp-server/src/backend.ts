@@ -1373,29 +1373,85 @@ async function startBackend(): Promise<void> {
     backendComfyUIHandlers: (globalThis as any).backendComfyUIHandlers,
   });
 
-  const allTools = [
-    ...characterTools.getToolDefinitions(),
-
-    ...compendiumTools.getToolDefinitions(),
-
-    ...sceneTools.getToolDefinitions(),
-
-    ...actorCreationTools.getToolDefinitions(),
-
-    ...dsa5CharacterCreator.getToolDefinitions(),
-
-    ...questCreationTools.getToolDefinitions(),
-
-    ...diceRollTools.getToolDefinitions(),
-
-    ...campaignManagementTools.getToolDefinitions(),
-
-    ...ownershipTools.getToolDefinitions(),
-
-    ...tokenManipulationTools.getToolDefinitions(),
-
-    ...mapGenerationTools.getToolDefinitions(),
+  // Voice state tools (always registered, but profile-filtered below)
+  const voiceStateTools = [
+    {
+      name: 'publish-voice-state',
+      description: 'Publish the current voice command state to the Foundry VTT panel',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          commandId: { type: 'string' },
+          state: { type: 'string', enum: ['idle', 'recording', 'transcribing', 'draft', 'executing', 'done', 'error'] },
+          transcript: { type: 'string' },
+          provider: { type: 'string' },
+          latencyMs: { type: 'number' },
+          message: { type: ['string', 'null'] },
+          error: { type: ['string', 'null'] },
+          updatedAt: { type: 'string' },
+        },
+        required: ['commandId', 'state'],
+      },
+    },
+    {
+      name: 'get-voice-state',
+      description: 'Get the last published voice command state',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
   ];
+
+  const rawTools = [
+    ...characterTools.getToolDefinitions(),
+    ...compendiumTools.getToolDefinitions(),
+    ...sceneTools.getToolDefinitions(),
+    ...actorCreationTools.getToolDefinitions(),
+    ...dsa5CharacterCreator.getToolDefinitions(),
+    ...questCreationTools.getToolDefinitions(),
+    ...diceRollTools.getToolDefinitions(),
+    ...campaignManagementTools.getToolDefinitions(),
+    ...ownershipTools.getToolDefinitions(),
+    ...tokenManipulationTools.getToolDefinitions(),
+    ...mapGenerationTools.getToolDefinitions(),
+    ...voiceStateTools,
+  ];
+
+  // Profile-based tool filtering
+  const profile = process.env.FOUNDRY_MCP_PROFILE || 'combat-runtime';
+  const combatRuntimeAllowList = new Set([
+    'get-world-info',
+    'list-characters',
+    'get-character',
+    'search-character-items',
+    'get-character-entity',
+    'list-scenes',
+    'get-current-scene',
+    'get-token-details',
+    'move-token',
+    'update-token',
+    'toggle-token-condition',
+    'request-player-rolls',
+    'use-item',
+  ]);
+  const internalControlAllowList = new Set([
+    'publish-voice-state',
+    'get-voice-state',
+  ]);
+
+  function filterTools(tools: any[], p: string): any[] {
+    if (p === 'gm-full') return tools;
+    if (p === 'internal-control') return tools.filter(t => internalControlAllowList.has(t.name));
+    // default combat-runtime
+    return tools.filter(t => combatRuntimeAllowList.has(t.name));
+  }
+
+  const allTools = filterTools(rawTools, profile);
+  logger.info('MCP profile loaded', { profile, toolCount: allTools.length });
+
+  // In-memory last voice state
+  let lastVoiceState: any = null;
 
   // Start Foundry connector (owns app port 31415)
 
@@ -1686,6 +1742,39 @@ async function startBackend(): Promise<void> {
                   result = await mapGenerationTools.switchScene(args);
 
                   break;
+
+                // Voice state tools
+                case 'publish-voice-state': {
+                  lastVoiceState = args || {};
+                  lastVoiceState.updatedAt = new Date().toISOString();
+                  result = { ok: true };
+                  // Push to Foundry module
+                  if (foundryClient) {
+                    try {
+                      foundryClient.sendMessage({
+                        type: 'voice.state',
+                        payload: {
+                          commandId: lastVoiceState.commandId,
+                          state: lastVoiceState.state,
+                          transcript: lastVoiceState.transcript,
+                          provider: lastVoiceState.provider,
+                          latencyMs: lastVoiceState.latencyMs,
+                          message: lastVoiceState.message,
+                          error: lastVoiceState.error,
+                          updatedAt: lastVoiceState.updatedAt,
+                        },
+                      });
+                    } catch (e) {
+                      logger.warn('Failed to send voice state to Foundry', { error: (e as any)?.message });
+                    }
+                  }
+                  break;
+                }
+
+                case 'get-voice-state': {
+                  result = lastVoiceState || { state: 'idle' };
+                  break;
+                }
 
                 default:
                   throw new Error(`Unknown tool: ${name}`);
