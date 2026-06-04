@@ -200,6 +200,11 @@
   pointer-events: auto;
 }
 
+.arcane-voice-panel.collapsed {
+  width: fit-content;
+  min-width: 0;
+}
+
 .arcane-voice-panel.collapsed .arcane-voice-body {
   display: none;
 }
@@ -210,7 +215,7 @@
   justify-content: center;
   gap: 8px;
   padding: 6px 14px;
-  background: rgba(30, 30, 30, 0.92);
+  background: rgba(20, 20, 20, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   cursor: pointer;
@@ -221,7 +226,7 @@
 }
 
 .arcane-voice-handle:hover {
-  background: rgba(45, 45, 45, 0.95);
+  background: rgba(30, 30, 30, 0.84);
 }
 
 .arcane-voice-indicator {
