@@ -6823,87 +6823,11 @@ export class FoundryDataAccess {
     const systemId = (game.system as any).id;
 
     // Handle targeting if targets are specified
-    const resolvedTargetNames: string[] = [];
+    let resolvedTargetNames: string[] = [];
     if (targets && targets.length > 0) {
-      // Get all rendered tokens on the current canvas. Foundry's targeting API works on
-      // Token objects, not TokenDocument entries from scene.tokens.
-      const scene = (game.scenes as any)?.active;
-      const canvasTokens = (canvas as any)?.tokens?.placeables ?? [];
-      if (!scene || !(canvas as any)?.ready) {
-        throw new Error('No active scene to find targets on');
-      }
-
-      const resolvedTargetTokens: any[] = [];
-
-      const matchesIdentifier = (token: any, identifier: string): boolean =>
-        token.id === identifier ||
-        token.document?.id === identifier ||
-        token.name?.toLowerCase() === identifier.toLowerCase() ||
-        token.document?.name?.toLowerCase() === identifier.toLowerCase() ||
-        token.actor?.id === identifier ||
-        token.actor?.name?.toLowerCase() === identifier.toLowerCase();
-
-      const findActor = (identifier: string): any =>
-        (game.actors as any)?.find(
-          (candidate: any) =>
-            candidate.id === identifier ||
-            candidate.name?.toLowerCase() === identifier.toLowerCase()
-        );
-
-      for (const targetIdentifier of targets) {
-        // Handle "self" - target the caster's token
-        if (targetIdentifier.toLowerCase() === 'self') {
-          // Find token for the caster actor
-          const selfToken = canvasTokens.find((t: any) => t.actor?.id === actor.id);
-          if (selfToken) {
-            resolvedTargetTokens.push(selfToken);
-            resolvedTargetNames.push(selfToken.name || actor.name);
-          } else {
-            console.warn(
-              `[foundry-mcp-bridge] No token found on scene for actor "${actor.name}" (self)`
-            );
-          }
-          continue;
-        }
-
-        // Find token by name or ID
-        const targetToken = canvasTokens.find((t: any) => matchesIdentifier(t, targetIdentifier));
-
-        if (targetToken) {
-          resolvedTargetTokens.push(targetToken);
-          resolvedTargetNames.push(targetToken.name || targetToken.actor?.name || targetIdentifier);
-        } else {
-          const targetActor = findActor(targetIdentifier);
-          if (targetActor) {
-            throw new Error(
-              `Target actor "${targetActor.name}" was found, but has no active token on the current scene`
-            );
-          }
-
-          console.warn(`[foundry-mcp-bridge] Target not found: "${targetIdentifier}"`);
-        }
-      }
-
-      // Set targets using Foundry's targeting system
-      if (resolvedTargetTokens.length > 0 && game.user) {
-        for (const target of Array.from((game.user as any).targets ?? [])) {
-          (target as any).setTarget(false, {
-            user: game.user,
-            releaseOthers: false,
-            groupSelection: true,
-          });
-        }
-
-        for (const targetToken of resolvedTargetTokens) {
-          targetToken.setTarget(true, {
-            user: game.user,
-            releaseOthers: false,
-            groupSelection: true,
-          });
-        }
-
-        console.log(`[foundry-mcp-bridge] Set targets: ${resolvedTargetNames.join(', ')}`);
-      }
+      const resolvedTargets = this.resolveItemUseTargets(actor, targets);
+      this.setUserTargets(resolvedTargets.tokens);
+      resolvedTargetNames = resolvedTargets.names;
     }
 
     try {
@@ -7047,5 +6971,285 @@ export class FoundryDataAccess {
         `Failed to use item "${item.name}": ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Use an item against explicit token targets and require those targets to enter
+   * the automated workflow. This is intentionally separate from useItem so self
+   * buffs, utility items, and template spells can keep their normal Foundry flow.
+   */
+  async useItemOnTargets(params: {
+    actorIdentifier: string;
+    itemIdentifier: string;
+    targets: string[];
+    activityIdentifier?: string | undefined;
+    options?:
+      | {
+          spellLevel?: number | undefined;
+          versatile?: boolean | undefined;
+        }
+      | undefined;
+  }): Promise<{
+    success: boolean;
+    status?: string;
+    message: string;
+    itemName?: string;
+    actorName?: string;
+    targets?: string[];
+    workflowId?: string;
+    itemCardId?: string;
+    failedSaves?: string[];
+    saves?: string[];
+    automation?: 'full' | 'partial';
+  }> {
+    this.validateFoundryState();
+
+    const { actorIdentifier, itemIdentifier, targets, activityIdentifier, options = {} } = params;
+
+    if (!targets || targets.length === 0) {
+      throw new Error('useItemOnTargets requires at least one target');
+    }
+
+    const actor = this.findActorByIdentifier(actorIdentifier);
+    if (!actor) {
+      throw new Error(`Actor not found: ${actorIdentifier}`);
+    }
+
+    const item = actor.items.find(
+      (i: any) => i.id === itemIdentifier || i.name.toLowerCase() === itemIdentifier.toLowerCase()
+    );
+    if (!item) {
+      throw new Error(`Item "${itemIdentifier}" not found on actor "${actor.name}"`);
+    }
+
+    const itemAny = item as any;
+    const resolvedTargets = this.resolveItemUseTargets(actor, targets);
+    this.setUserTargets(resolvedTargets.tokens);
+
+    const midi = (globalThis as any).MidiQOL;
+    const activities = this.getUsableItemActivities(itemAny);
+    const activity = this.resolveItemActivity(activities, activityIdentifier);
+
+    if (midi && typeof midi.completeItemUse === 'function') {
+      try {
+        const targetUuids = resolvedTargets.tokens.map((token: any) => token.document?.uuid).filter(Boolean);
+        const usageConfig: Record<string, any> = {
+          chooseActivity: false,
+          configure: false,
+          createMessage: true,
+          midiOptions: {
+            targetUuids,
+            targetsToUse: new Set(resolvedTargets.tokens),
+            ignoreUserTargets: false,
+            fastForward: true,
+            workflowOptions: { targetUuids },
+          },
+        };
+
+        if (activity?.id) usageConfig.activity = activity.id;
+        if (options.spellLevel !== undefined) {
+          usageConfig.slotLevel = options.spellLevel;
+          usageConfig.level = options.spellLevel;
+        }
+
+        const workflow = await midi.completeItemUse(itemAny, usageConfig, { configure: false }, {});
+
+        const failedSaves = workflow?.failedSaves
+          ? Array.from(workflow.failedSaves).map((token: any) => token.name)
+          : undefined;
+        const saves = workflow?.saves
+          ? Array.from(workflow.saves).map((token: any) => token.name)
+          : undefined;
+
+        this.auditLog(
+          'useItemOnTargets',
+          {
+            actorId: actor.id,
+            itemId: item.id,
+            itemName: item.name,
+            targets: resolvedTargets.names,
+            workflowId: workflow?.id,
+          },
+          'success'
+        );
+
+        const result: {
+          success: boolean;
+          status?: string;
+          message: string;
+          itemName?: string;
+          actorName?: string;
+          targets?: string[];
+          workflowId?: string;
+          itemCardId?: string;
+          failedSaves?: string[];
+          saves?: string[];
+          automation?: 'full' | 'partial';
+        } = {
+          success: true,
+          status: 'completed',
+          message: `Item use completed for ${actor.name} using ${item.name} targeting ${resolvedTargets.names.join(', ')}.`,
+          itemName: item.name,
+          actorName: actor.name,
+          targets: resolvedTargets.names,
+          workflowId: workflow?.id,
+          itemCardId: workflow?.itemCardId,
+          automation: 'full',
+        };
+
+        if (failedSaves) result.failedSaves = failedSaves;
+        if (saves) result.saves = saves;
+
+        return result;
+      } catch (error) {
+        this.auditLog(
+          'useItemOnTargets',
+          {
+            actorId: actor.id,
+            itemId: item.id,
+          },
+          'failure',
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+        throw new Error(
+          `Failed to use item "${item.name}" on targets: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    if (typeof itemAny.use === 'function') {
+      itemAny.use({ createMessage: true }).catch((err: Error) => {
+        console.error(`[foundry-mcp-bridge] Error using item ${item.name}:`, err);
+      });
+
+      return {
+        success: true,
+        status: 'initiated',
+        message: `Midi-QOL completeItemUse is not available. Set Foundry targets and initiated normal item use for ${actor.name} using ${item.name}.`,
+        itemName: item.name,
+        actorName: actor.name,
+        targets: resolvedTargets.names,
+        automation: 'partial',
+      };
+    }
+
+    throw new Error(`Item "${item.name}" cannot be used: no supported use method found`);
+  }
+
+  private resolveItemUseTargets(actor: any, targets: string[]): { tokens: any[]; names: string[] } {
+    const scene = (game.scenes as any)?.active;
+    const canvasTokens = (canvas as any)?.tokens?.placeables ?? [];
+    if (!scene || !(canvas as any)?.ready) {
+      throw new Error('No active scene to find targets on');
+    }
+
+    const resolvedTargetTokens: any[] = [];
+    const resolvedTargetNames: string[] = [];
+
+    const matchesIdentifier = (token: any, identifier: string): boolean =>
+      token.id === identifier ||
+      token.document?.id === identifier ||
+      token.name?.toLowerCase() === identifier.toLowerCase() ||
+      token.document?.name?.toLowerCase() === identifier.toLowerCase() ||
+      token.actor?.id === identifier ||
+      token.actor?.name?.toLowerCase() === identifier.toLowerCase();
+
+    const findActor = (identifier: string): any =>
+      (game.actors as any)?.find(
+        (candidate: any) =>
+          candidate.id === identifier || candidate.name?.toLowerCase() === identifier.toLowerCase()
+      );
+
+    for (const targetIdentifier of targets) {
+      if (targetIdentifier.toLowerCase() === 'self') {
+        const selfToken = canvasTokens.find((t: any) => t.actor?.id === actor.id);
+        if (!selfToken) {
+          throw new Error(`No active token found on the current scene for actor "${actor.name}"`);
+        }
+        resolvedTargetTokens.push(selfToken);
+        resolvedTargetNames.push(selfToken.name || actor.name);
+        continue;
+      }
+
+      const targetToken = canvasTokens.find((t: any) => matchesIdentifier(t, targetIdentifier));
+      if (targetToken) {
+        resolvedTargetTokens.push(targetToken);
+        resolvedTargetNames.push(targetToken.name || targetToken.actor?.name || targetIdentifier);
+        continue;
+      }
+
+      const targetActor = findActor(targetIdentifier);
+      if (targetActor) {
+        throw new Error(
+          `Target actor "${targetActor.name}" was found, but has no active token on the current scene`
+        );
+      }
+
+      throw new Error(`Target not found on current scene: "${targetIdentifier}"`);
+    }
+
+    return { tokens: resolvedTargetTokens, names: resolvedTargetNames };
+  }
+
+  private setUserTargets(tokens: any[]): void {
+    if (!game.user) return;
+
+    for (const target of Array.from((game.user as any).targets ?? [])) {
+      (target as any).setTarget(false, {
+        user: game.user,
+        releaseOthers: false,
+        groupSelection: true,
+      });
+    }
+
+    for (const targetToken of tokens) {
+      targetToken.setTarget(true, {
+        user: game.user,
+        releaseOthers: false,
+        groupSelection: true,
+      });
+    }
+
+    console.log(
+      `[foundry-mcp-bridge] Set targets: ${tokens.map((token: any) => token.name).join(', ')}`
+    );
+  }
+
+  private getUsableItemActivities(item: any): any[] {
+    const activities = item.system?.activities;
+    if (!activities) return [];
+    const values =
+      typeof activities.filter === 'function'
+        ? activities.filter((activity: any) => activity.canUse !== false)
+        : Array.from(activities.values?.() ?? Object.values(activities));
+    return values.filter((activity: any) => activity && activity.canUse !== false);
+  }
+
+  private resolveItemActivity(activities: any[], activityIdentifier?: string): any | undefined {
+    if (activities.length === 0) return undefined;
+
+    if (activityIdentifier) {
+      const match = activities.find(
+        (activity: any) =>
+          activity.id === activityIdentifier ||
+          activity._id === activityIdentifier ||
+          activity.name?.toLowerCase() === activityIdentifier.toLowerCase() ||
+          activity.type?.toLowerCase() === activityIdentifier.toLowerCase()
+      );
+      if (!match) {
+        throw new Error(`Activity "${activityIdentifier}" not found on item`);
+      }
+      return match;
+    }
+
+    if (activities.length > 1) {
+      throw new Error(
+        `Item has multiple usable activities (${activities
+          .map((activity: any) => activity.name || activity.type || activity.id)
+          .join(', ')}); provide activityIdentifier`
+      );
+    }
+
+    return activities[0];
   }
 }

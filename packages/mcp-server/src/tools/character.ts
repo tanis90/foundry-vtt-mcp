@@ -109,7 +109,7 @@ export class CharacterTools {
       {
         name: 'use-item',
         description:
-          'Use an item on a character (cast spell, use ability, activate feature, consume item). Opens the item dialog in Foundry VTT for the GM to configure options and confirm. Optionally specify targets by name. Returns immediately with status "initiated" - tell the user to check Foundry for any dialogs. Works across systems: D&D 5e, PF2e, DSA5. Use get-character or search-character-items first to see available items/spells.',
+          'Use an item on a character (cast spell, use ability, activate feature, consume item) through the normal Foundry flow. Best for self buffs, utility items, items that need GM configuration, template placement, or non-midi systems. For explicitly targeted automated attacks/saves/effects, use use-item-on-targets instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -137,6 +137,41 @@ export class CharacterTools {
             },
           },
           required: ['actorIdentifier', 'itemIdentifier'],
+        },
+      },
+      {
+        name: 'use-item-on-targets',
+        description:
+          'Use an item against explicit current-scene token targets and require those targets to enter the automated workflow. Best for D&D 5e midi-qol attacks, saves, and targeted effects such as Abjure Enemy. Requires targets. Supports ["self"] for self-targeted effects. If an item has multiple usable activities, pass activityIdentifier instead of guessing.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            actorIdentifier: {
+              type: 'string',
+              description: 'Character using the item (name or ID)',
+            },
+            itemIdentifier: {
+              type: 'string',
+              description: 'Item name or ID (spell, feat, equipment, consumable, etc.)',
+            },
+            targets: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string' },
+              description:
+                'Required target token/actor names or IDs on the current scene. Use ["self"] to target the caster.',
+            },
+            activityIdentifier: {
+              type: 'string',
+              description:
+                'Optional activity id, name, or type when an item has multiple usable activities.',
+            },
+            spellLevel: {
+              type: 'number',
+              description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
+            },
+          },
+          required: ['actorIdentifier', 'itemIdentifier', 'targets'],
         },
       },
       {
@@ -484,6 +519,55 @@ export class CharacterTools {
       this.logger.error('Failed to use item', error);
       throw new Error(
         `Failed to use item "${itemIdentifier}": ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleUseItemOnTargets(args: any): Promise<any> {
+    const schema = z.object({
+      actorIdentifier: z.string().min(1, 'Actor identifier cannot be empty'),
+      itemIdentifier: z.string().min(1, 'Item identifier cannot be empty'),
+      targets: z.array(z.string()).min(1, 'At least one target is required'),
+      activityIdentifier: z.string().optional(),
+      spellLevel: z.number().optional(),
+    });
+
+    const { actorIdentifier, itemIdentifier, targets, activityIdentifier, spellLevel } =
+      schema.parse(args);
+
+    this.logger.info('Using item on targets', {
+      actorIdentifier,
+      itemIdentifier,
+      targets,
+      activityIdentifier,
+      spellLevel,
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.useItemOnTargets', {
+        actorIdentifier,
+        itemIdentifier,
+        targets,
+        activityIdentifier,
+        options: {
+          spellLevel,
+        },
+      });
+
+      this.logger.debug('Successfully used item on targets', {
+        actorName: result.actorName,
+        itemName: result.itemName,
+        targets: result.targets,
+        workflowId: result.workflowId,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to use item on targets', error);
+      throw new Error(
+        `Failed to use item "${itemIdentifier}" on targets: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
       );
     }
   }

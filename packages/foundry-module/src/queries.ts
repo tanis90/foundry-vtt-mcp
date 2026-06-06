@@ -106,6 +106,7 @@ export class QueryHandlers {
 
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
+    CONFIG.queries[`${modulePrefix}.useItemOnTargets`] = this.handleUseItemOnTargets.bind(this);
 
     // Character search queries
     CONFIG.queries[`${modulePrefix}.searchCharacterItems`] =
@@ -1432,6 +1433,52 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to use item: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle targeted automated item use request.
+   */
+  private async handleUseItemOnTargets(data: {
+    actorIdentifier: string;
+    itemIdentifier: string;
+    targets: string[];
+    activityIdentifier?: string;
+    options?: {
+      spellLevel?: number;
+      versatile?: boolean;
+    };
+  }): Promise<any> {
+    try {
+      // SECURITY: Silent GM validation
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.actorIdentifier) {
+        throw new Error('actorIdentifier is required');
+      }
+      if (!data.itemIdentifier) {
+        throw new Error('itemIdentifier is required');
+      }
+      if (!Array.isArray(data.targets) || data.targets.length === 0) {
+        throw new Error('targets are required');
+      }
+
+      return await this.dataAccess.useItemOnTargets({
+        actorIdentifier: data.actorIdentifier,
+        itemIdentifier: data.itemIdentifier,
+        targets: data.targets,
+        activityIdentifier: data.activityIdentifier,
+        options: data.options,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to use item on targets: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

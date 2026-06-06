@@ -1482,6 +1482,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'use-item-on-targets':
+                  result = await characterTools.handleUseItemOnTargets(args);
+
+                  break;
+
                 case 'search-character-items':
                   result = await characterTools.handleSearchCharacterItems(args);
 
