@@ -6825,25 +6825,39 @@ export class FoundryDataAccess {
     // Handle targeting if targets are specified
     const resolvedTargetNames: string[] = [];
     if (targets && targets.length > 0) {
-      // Get all tokens on the current scene
+      // Get all rendered tokens on the current canvas. Foundry's targeting API works on
+      // Token objects, not TokenDocument entries from scene.tokens.
       const scene = (game.scenes as any)?.active;
-      if (!scene) {
+      const canvasTokens = (canvas as any)?.tokens?.placeables ?? [];
+      if (!scene || !(canvas as any)?.ready) {
         throw new Error('No active scene to find targets on');
       }
 
-      const sceneTokens = scene.tokens;
-      const tokenIds: string[] = [];
+      const resolvedTargetTokens: any[] = [];
+
+      const matchesIdentifier = (token: any, identifier: string): boolean =>
+        token.id === identifier ||
+        token.document?.id === identifier ||
+        token.name?.toLowerCase() === identifier.toLowerCase() ||
+        token.document?.name?.toLowerCase() === identifier.toLowerCase() ||
+        token.actor?.id === identifier ||
+        token.actor?.name?.toLowerCase() === identifier.toLowerCase();
+
+      const findActor = (identifier: string): any =>
+        (game.actors as any)?.find(
+          (candidate: any) =>
+            candidate.id === identifier ||
+            candidate.name?.toLowerCase() === identifier.toLowerCase()
+        );
 
       for (const targetIdentifier of targets) {
         // Handle "self" - target the caster's token
         if (targetIdentifier.toLowerCase() === 'self') {
           // Find token for the caster actor
-          const selfToken = sceneTokens.find(
-            (t: any) => t.actor?.id === actor.id || t.actorId === actor.id
-          );
+          const selfToken = canvasTokens.find((t: any) => t.actor?.id === actor.id);
           if (selfToken) {
-            tokenIds.push(selfToken.id);
-            resolvedTargetNames.push(actor.name);
+            resolvedTargetTokens.push(selfToken);
+            resolvedTargetNames.push(selfToken.name || actor.name);
           } else {
             console.warn(
               `[foundry-mcp-bridge] No token found on scene for actor "${actor.name}" (self)`
@@ -6853,24 +6867,41 @@ export class FoundryDataAccess {
         }
 
         // Find token by name or ID
-        const targetToken = sceneTokens.find(
-          (t: any) =>
-            t.id === targetIdentifier ||
-            t.name?.toLowerCase() === targetIdentifier.toLowerCase() ||
-            t.actor?.name?.toLowerCase() === targetIdentifier.toLowerCase()
-        );
+        const targetToken = canvasTokens.find((t: any) => matchesIdentifier(t, targetIdentifier));
 
         if (targetToken) {
-          tokenIds.push(targetToken.id);
+          resolvedTargetTokens.push(targetToken);
           resolvedTargetNames.push(targetToken.name || targetToken.actor?.name || targetIdentifier);
         } else {
+          const targetActor = findActor(targetIdentifier);
+          if (targetActor) {
+            throw new Error(
+              `Target actor "${targetActor.name}" was found, but has no active token on the current scene`
+            );
+          }
+
           console.warn(`[foundry-mcp-bridge] Target not found: "${targetIdentifier}"`);
         }
       }
 
       // Set targets using Foundry's targeting system
-      if (tokenIds.length > 0 && game.user) {
-        await (game.user as any).updateTokenTargets(tokenIds);
+      if (resolvedTargetTokens.length > 0 && game.user) {
+        for (const target of Array.from((game.user as any).targets ?? [])) {
+          (target as any).setTarget(false, {
+            user: game.user,
+            releaseOthers: false,
+            groupSelection: true,
+          });
+        }
+
+        for (const targetToken of resolvedTargetTokens) {
+          targetToken.setTarget(true, {
+            user: game.user,
+            releaseOthers: false,
+            groupSelection: true,
+          });
+        }
+
         console.log(`[foundry-mcp-bridge] Set targets: ${resolvedTargetNames.join(', ')}`);
       }
     }
