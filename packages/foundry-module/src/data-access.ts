@@ -6789,6 +6789,7 @@ export class FoundryDataAccess {
           skipDialog?: boolean | undefined; // Skip confirmation dialogs (default: true for MCP)
           spellLevel?: number | undefined; // For spells: cast at higher level
           versatile?: boolean | undefined; // For versatile weapons: use versatile damage
+          declaredRiders?: Array<Record<string, any>> | undefined; // Workflow-local rider intent such as Divine Smite
         }
       | undefined;
   }): Promise<{
@@ -6856,6 +6857,14 @@ export class FoundryDataAccess {
         if (options.spellLevel !== undefined) {
           useOptions.slotLevel = options.spellLevel; // D&D 5e
           useOptions.level = options.spellLevel; // generic
+        }
+
+        if (options.declaredRiders && options.declaredRiders.length > 0) {
+          useOptions.arcaneDeclaredRiders = options.declaredRiders;
+          useOptions.workflowOptions = {
+            ...(useOptions.workflowOptions ?? {}),
+            arcaneDeclaredRiders: options.declaredRiders,
+          };
         }
 
         // Fire and forget - don't await, as dialogs block the promise
@@ -6987,6 +6996,7 @@ export class FoundryDataAccess {
       | {
           spellLevel?: number | undefined;
           versatile?: boolean | undefined;
+          declaredRiders?: Array<Record<string, any>> | undefined;
         }
       | undefined;
   }): Promise<{
@@ -7032,17 +7042,22 @@ export class FoundryDataAccess {
 
     if (midi && typeof midi.completeItemUse === 'function') {
       try {
-        const targetUuids = resolvedTargets.tokens.map((token: any) => token.document?.uuid).filter(Boolean);
+        const targetUuids = resolvedTargets.tokens
+          .map((token: any) => token.document?.uuid)
+          .filter(Boolean);
+        const declaredRiders = options.declaredRiders ?? [];
         const usageConfig: Record<string, any> = {
           chooseActivity: false,
           configure: false,
           createMessage: true,
+          arcaneDeclaredRiders: declaredRiders,
           midiOptions: {
             targetUuids,
             targetsToUse: new Set(resolvedTargets.tokens),
             ignoreUserTargets: false,
             fastForward: true,
-            workflowOptions: { targetUuids },
+            arcaneDeclaredRiders: declaredRiders,
+            workflowOptions: { targetUuids, arcaneDeclaredRiders: declaredRiders },
           },
         };
 

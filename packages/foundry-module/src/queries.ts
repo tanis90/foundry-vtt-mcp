@@ -1406,6 +1406,7 @@ export class QueryHandlers {
       configureDialog?: boolean;
       spellLevel?: number;
       versatile?: boolean;
+      declaredRiders?: Array<Record<string, any>>;
     };
   }): Promise<any> {
     try {
@@ -1448,6 +1449,7 @@ export class QueryHandlers {
     options?: {
       spellLevel?: number;
       versatile?: boolean;
+      declaredRiders?: Array<Record<string, any>>;
     };
   }): Promise<any> {
     try {
@@ -1579,7 +1581,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.updateWorldItems({ updates: data.updates });
     } catch (error) {
-      throw new Error(`Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1602,7 +1606,9 @@ export class QueryHandlers {
         ...(data.nameFilter !== undefined ? { nameFilter: data.nameFilter } : {}),
       });
     } catch (error) {
-      throw new Error(`Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1638,5 +1644,4 @@ export class QueryHandlers {
       );
     }
   }
-
 }
