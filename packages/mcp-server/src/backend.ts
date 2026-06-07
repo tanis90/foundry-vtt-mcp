@@ -1487,6 +1487,21 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'rest':
+                  result = await characterTools.handleRest(args);
+
+                  break;
+
+                case 'grant-bardic-inspiration':
+                  result = await characterTools.handleGrantBardicInspiration(args);
+
+                  break;
+
+                case 'use-bardic-inspiration':
+                  result = await characterTools.handleUseBardicInspiration(args);
+
+                  break;
+
                 case 'search-character-items':
                   result = await characterTools.handleSearchCharacterItems(args);
 

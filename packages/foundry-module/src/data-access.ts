@@ -6775,6 +6775,166 @@ export class FoundryDataAccess {
    */
 
   /**
+   * Rest a single actor or dnd5e group actor via Arcane automation.
+   */
+  async rest(params: {
+    targetIdentifier: string;
+    restType?: 'short' | 'long';
+    targetType?: 'auto' | 'actor' | 'group';
+  }): Promise<{
+    success: boolean;
+    message: string;
+    targetName: string;
+    targetType: 'actor' | 'group';
+    restType: 'short' | 'long';
+    members: Array<{
+      id: string;
+      name: string;
+      hp?: { value: number | null; max: number | null };
+      hitDice?: { value: number | null; max: number | null };
+    }>;
+  }> {
+    this.validateFoundryState();
+
+    const { targetIdentifier, restType = 'short', targetType = 'auto' } = params;
+
+    if (!['short', 'long'].includes(restType)) {
+      throw new Error(`Unsupported rest type: ${restType}`);
+    }
+    if (!['auto', 'actor', 'group'].includes(targetType)) {
+      throw new Error(`Unsupported target type: ${targetType}`);
+    }
+
+    const arcaneModule = game.modules?.get('arcane-dnd5e-2014-automation') as any;
+    const api = arcaneModule?.api;
+    if (!arcaneModule?.active || !api?.restActor || !api?.restGroup) {
+      throw new Error(
+        'Arcane automation module API is not available. Enable arcane-dnd5e-2014-automation and reload Foundry.'
+      );
+    }
+
+    const target = this.findActorByIdentifier(targetIdentifier);
+    if (!target) {
+      throw new Error(`Actor or group not found: ${targetIdentifier}`);
+    }
+
+    const isGroup = target.type === 'group';
+    if (targetType === 'group' && !isGroup) {
+      throw new Error(`${target.name} is not a group actor`);
+    }
+    if (targetType === 'actor' && isGroup) {
+      throw new Error(`${target.name} is a group actor; use targetType "group" or "auto"`);
+    }
+
+    const resolvedTargetType: 'actor' | 'group' = isGroup ? 'group' : 'actor';
+    const result =
+      resolvedTargetType === 'group'
+        ? await api.restGroup(target.id, restType)
+        : await api.restActor(target.id, restType);
+
+    const summarizeActor = (actor: any) => ({
+      id: actor.id,
+      name: actor.name,
+      hp: actor.system?.attributes?.hp
+        ? {
+            value: Number(actor.system.attributes.hp.value ?? null),
+            max: Number(actor.system.attributes.hp.max ?? null),
+          }
+        : undefined,
+      hitDice: actor.system?.attributes?.hd
+        ? {
+            value: Number(actor.system.attributes.hd.value ?? null),
+            max: Number(actor.system.attributes.hd.max ?? null),
+          }
+        : undefined,
+    });
+
+    const members =
+      resolvedTargetType === 'group'
+        ? ((target.system?.members ?? [])
+            .map((member: any) => member.actor)
+            .filter(Boolean)
+            .map(summarizeActor) as Array<{
+            id: string;
+            name: string;
+            hp?: { value: number | null; max: number | null };
+            hitDice?: { value: number | null; max: number | null };
+          }>)
+        : [summarizeActor(target)];
+
+    return {
+      success: true,
+      message:
+        restType === 'short'
+          ? `${target.name} completed an Arcane BG3-style short rest.`
+          : `${target.name} completed a long rest.`,
+      targetName: target.name,
+      targetType: resolvedTargetType,
+      restType,
+      members,
+      ...(result ? { restResult: result } : {}),
+    } as any;
+  }
+
+  /**
+   * Grant Bardic Inspiration through the Arcane automation module.
+   */
+  async grantBardicInspiration(params: {
+    bardIdentifier: string;
+    targetIdentifier: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const arcaneModule = game.modules?.get('arcane-dnd5e-2014-automation') as any;
+    const api = arcaneModule?.api;
+    if (!arcaneModule?.active || !api?.grantBardicInspiration) {
+      throw new Error(
+        'Arcane automation module API is not available. Enable arcane-dnd5e-2014-automation and reload Foundry.'
+      );
+    }
+
+    const bard = this.findActorByIdentifier(params.bardIdentifier);
+    const target = this.findActorByIdentifier(params.targetIdentifier);
+    if (!bard) throw new Error(`Bard not found: ${params.bardIdentifier}`);
+    if (!target) throw new Error(`Target actor not found: ${params.targetIdentifier}`);
+
+    const result = await api.grantBardicInspiration(bard.id, target.id);
+    return {
+      success: true,
+      message: `${bard.name} granted Bardic Inspiration (${result.die}) to ${target.name}.`,
+      ...result,
+    };
+  }
+
+  /**
+   * Mark a target's Bardic Inspiration for the next relevant roll.
+   */
+  async useBardicInspiration(params: {
+    targetIdentifier: string;
+    rollType?: 'attack' | 'save' | 'check' | 'any';
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const arcaneModule = game.modules?.get('arcane-dnd5e-2014-automation') as any;
+    const api = arcaneModule?.api;
+    if (!arcaneModule?.active || !api?.declareBardicInspirationUse) {
+      throw new Error(
+        'Arcane automation module API is not available. Enable arcane-dnd5e-2014-automation and reload Foundry.'
+      );
+    }
+
+    const target = this.findActorByIdentifier(params.targetIdentifier);
+    if (!target) throw new Error(`Target actor not found: ${params.targetIdentifier}`);
+
+    const result = await api.declareBardicInspirationUse(target.id, params.rollType ?? 'attack');
+    return {
+      success: true,
+      message: `${target.name} will use Bardic Inspiration (${result.die}) on the next ${params.rollType ?? 'attack'} roll.`,
+      ...result,
+    };
+  }
+
+  /**
    * Use an item on a character (cast spell, use ability, consume item, etc.)
    * This triggers the item's default use behavior in Foundry VTT
    */

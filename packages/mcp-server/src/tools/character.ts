@@ -203,6 +203,71 @@ export class CharacterTools {
         },
       },
       {
+        name: 'rest',
+        description:
+          'Rest a single actor or a dnd5e group actor through the Arcane automation module. Short rests invoked through this tool use Arcane BG3-style short rest behavior by default: no hit dice are spent, each rested actor heals floor(max HP / 2), and short-rest resources recover. Use this for commands like "主角小队短休" or "阿拉贡短休".',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            targetIdentifier: {
+              type: 'string',
+              description: 'Actor or dnd5e group actor name/ID to rest.',
+            },
+            restType: {
+              type: 'string',
+              enum: ['short', 'long'],
+              description: 'Rest type. Defaults to "short".',
+            },
+            targetType: {
+              type: 'string',
+              enum: ['auto', 'actor', 'group'],
+              description:
+                'How to resolve the target. Defaults to "auto"; use "group" to require a dnd5e group actor or "actor" to require a non-group actor.',
+            },
+          },
+          required: ['targetIdentifier'],
+        },
+      },
+      {
+        name: 'grant-bardic-inspiration',
+        description:
+          'Grant Bardic Inspiration from a bard to one target through the Arcane automation module. This consumes one Bardic Inspiration use and places a Bardic Inspiration effect on the target.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            bardIdentifier: {
+              type: 'string',
+              description: 'Bard actor name or ID granting Bardic Inspiration.',
+            },
+            targetIdentifier: {
+              type: 'string',
+              description: 'Target actor name or ID receiving Bardic Inspiration.',
+            },
+          },
+          required: ['bardIdentifier', 'targetIdentifier'],
+        },
+      },
+      {
+        name: 'use-bardic-inspiration',
+        description:
+          'Declare that an actor will consume an existing Bardic Inspiration effect on their next attack roll, saving throw, ability check, or any eligible roll. The actual die is added and the effect is removed by Foundry roll hooks.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            targetIdentifier: {
+              type: 'string',
+              description: 'Actor name or ID that already has Bardic Inspiration.',
+            },
+            rollType: {
+              type: 'string',
+              enum: ['attack', 'save', 'check', 'any'],
+              description: 'Roll type to apply the inspiration die to. Defaults to attack.',
+            },
+          },
+          required: ['targetIdentifier'],
+        },
+      },
+      {
         name: 'manage-world-items',
         description:
           'Manage Item documents in Foundry VTT. Specify the operation with "action":\n' +
@@ -629,6 +694,99 @@ export class CharacterTools {
       this.logger.error('Failed to use item on targets', error);
       throw new Error(
         `Failed to use item "${itemIdentifier}" on targets: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleRest(args: any): Promise<any> {
+    const schema = z.object({
+      targetIdentifier: z.string().min(1, 'Target identifier cannot be empty'),
+      restType: z.enum(['short', 'long']).optional().default('short'),
+      targetType: z.enum(['auto', 'actor', 'group']).optional().default('auto'),
+    });
+
+    const { targetIdentifier, restType, targetType } = schema.parse(args);
+
+    this.logger.info('Resting actor or group', {
+      targetIdentifier,
+      restType,
+      targetType,
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.rest', {
+        targetIdentifier,
+        restType,
+        targetType,
+      });
+
+      this.logger.debug('Successfully rested actor or group', {
+        targetName: result.targetName,
+        targetType: result.targetType,
+        restType: result.restType,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to rest actor or group', error);
+      throw new Error(
+        `Failed to rest "${targetIdentifier}": ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleGrantBardicInspiration(args: any): Promise<any> {
+    const schema = z.object({
+      bardIdentifier: z.string().min(1, 'Bard identifier cannot be empty'),
+      targetIdentifier: z.string().min(1, 'Target identifier cannot be empty'),
+    });
+
+    const { bardIdentifier, targetIdentifier } = schema.parse(args);
+
+    this.logger.info('Granting Bardic Inspiration', {
+      bardIdentifier,
+      targetIdentifier,
+    });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.grantBardicInspiration', {
+        bardIdentifier,
+        targetIdentifier,
+      });
+    } catch (error) {
+      this.logger.error('Failed to grant Bardic Inspiration', error);
+      throw new Error(
+        `Failed to grant Bardic Inspiration from "${bardIdentifier}" to "${targetIdentifier}": ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleUseBardicInspiration(args: any): Promise<any> {
+    const schema = z.object({
+      targetIdentifier: z.string().min(1, 'Target identifier cannot be empty'),
+      rollType: z.enum(['attack', 'save', 'check', 'any']).optional().default('attack'),
+    });
+
+    const { targetIdentifier, rollType } = schema.parse(args);
+
+    this.logger.info('Declaring Bardic Inspiration use', {
+      targetIdentifier,
+      rollType,
+    });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.useBardicInspiration', {
+        targetIdentifier,
+        rollType,
+      });
+    } catch (error) {
+      this.logger.error('Failed to use Bardic Inspiration', error);
+      throw new Error(
+        `Failed to use Bardic Inspiration for "${targetIdentifier}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

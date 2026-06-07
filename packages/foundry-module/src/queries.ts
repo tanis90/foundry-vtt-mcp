@@ -107,6 +107,11 @@ export class QueryHandlers {
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
     CONFIG.queries[`${modulePrefix}.useItemOnTargets`] = this.handleUseItemOnTargets.bind(this);
+    CONFIG.queries[`${modulePrefix}.rest`] = this.handleRest.bind(this);
+    CONFIG.queries[`${modulePrefix}.grantBardicInspiration`] =
+      this.handleGrantBardicInspiration.bind(this);
+    CONFIG.queries[`${modulePrefix}.useBardicInspiration`] =
+      this.handleUseBardicInspiration.bind(this);
 
     // Character search queries
     CONFIG.queries[`${modulePrefix}.searchCharacterItems`] =
@@ -1481,6 +1486,89 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to use item on targets: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle actor or group rest requests through the Arcane automation module.
+   */
+  private async handleRest(data: {
+    targetIdentifier: string;
+    restType?: 'short' | 'long';
+    targetType?: 'auto' | 'actor' | 'group';
+  }): Promise<any> {
+    try {
+      // SECURITY: Silent GM validation
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.targetIdentifier) {
+        throw new Error('targetIdentifier is required');
+      }
+
+      return await this.dataAccess.rest({
+        targetIdentifier: data.targetIdentifier,
+        restType: data.restType ?? 'short',
+        targetType: data.targetType ?? 'auto',
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to rest target: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle Bardic Inspiration grants through the Arcane automation module.
+   */
+  private async handleGrantBardicInspiration(data: {
+    bardIdentifier: string;
+    targetIdentifier: string;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.grantBardicInspiration({
+        bardIdentifier: data.bardIdentifier,
+        targetIdentifier: data.targetIdentifier,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to grant Bardic Inspiration: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle declaring use of an existing Bardic Inspiration effect.
+   */
+  private async handleUseBardicInspiration(data: {
+    targetIdentifier: string;
+    rollType?: 'attack' | 'save' | 'check' | 'any';
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.useBardicInspiration({
+        targetIdentifier: data.targetIdentifier,
+        rollType: data.rollType ?? 'attack',
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to use Bardic Inspiration: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
