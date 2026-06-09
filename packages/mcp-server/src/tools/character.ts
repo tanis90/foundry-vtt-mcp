@@ -52,6 +52,17 @@ export class CharacterTools {
     return this.systemRegistry.getAdapter(this.cachedGameSystem ?? 'other');
   }
 
+  private normalizeDeclaredRiders(
+    riderIds: string[],
+    riderOptions: Record<string, Record<string, unknown>> = {}
+  ) {
+    return riderIds.map(id => ({
+      id,
+      identifier: id,
+      ...riderOptions[id],
+    }));
+  }
+
   /**
    * Tool: get-character
    * Retrieve detailed information about a specific character
@@ -135,19 +146,20 @@ export class CharacterTools {
               type: 'number',
               description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
             },
-            declaredRiders: {
+            riderIds: {
               type: 'array',
-              items: {
+              items: { type: 'string', minLength: 1 },
+              description:
+                'Rider identifiers to declare, for example ["phb-great-weapon-master","divine-smite"].',
+            },
+            riderOptions: {
+              type: 'object',
+              description:
+                'Optional per-rider options, keyed by rider id. Example: {"divine-smite": {"spellLevel": 2}}.',
+              additionalProperties: {
                 type: 'object',
-                properties: {
-                  id: { type: 'string' },
-                  spellLevel: { type: 'number' },
-                },
-                required: ['id'],
                 additionalProperties: true,
               },
-              description:
-                'Workflow-local rider intent to pass into automation, for example [{ "id": "divine-smite", "spellLevel": 1 }].',
             },
           },
           required: ['actorIdentifier', 'itemIdentifier'],
@@ -184,19 +196,21 @@ export class CharacterTools {
               type: 'number',
               description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
             },
-            declaredRiders: {
+            riderIds: {
               type: 'array',
-              items: {
+              minItems: 1,
+              items: { type: 'string', minLength: 1 },
+              description:
+                'Rider identifiers to declare, for example ["phb-great-weapon-master","divine-smite"].',
+            },
+            riderOptions: {
+              type: 'object',
+              description:
+                'Optional per-rider options, keyed by rider id. Example: {"divine-smite": {"spellLevel": 2}}.',
+              additionalProperties: {
                 type: 'object',
-                properties: {
-                  id: { type: 'string' },
-                  spellLevel: { type: 'number' },
-                },
-                required: ['id'],
                 additionalProperties: true,
               },
-              description:
-                'Workflow-local rider intent to pass into automation, for example [{ "id": "divine-smite", "spellLevel": 1 }].',
             },
           },
           required: ['actorIdentifier', 'itemIdentifier', 'targets'],
@@ -572,12 +586,6 @@ export class CharacterTools {
   }
 
   async handleUseItem(args: any): Promise<any> {
-    const declaredRiderSchema = z
-      .object({
-        id: z.string().min(1, 'Rider id cannot be empty'),
-        spellLevel: z.number().optional(),
-      })
-      .passthrough();
     const schema = z.object({
       actorIdentifier: z.string().min(1, 'Actor identifier cannot be empty'),
       itemIdentifier: z.string().min(1, 'Item identifier cannot be empty'),
@@ -585,7 +593,8 @@ export class CharacterTools {
       consume: z.boolean().optional(),
       spellLevel: z.number().optional(),
       skipDialog: z.boolean().optional(),
-      declaredRiders: z.array(declaredRiderSchema).optional(),
+      riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
+      riderOptions: z.record(z.record(z.unknown())).default({}),
     });
 
     const {
@@ -595,8 +604,10 @@ export class CharacterTools {
       consume,
       spellLevel,
       skipDialog,
-      declaredRiders,
+      riderIds,
+      riderOptions,
     } = schema.parse(args);
+    const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
 
     this.logger.info('Using item', {
       actorIdentifier,
@@ -605,7 +616,8 @@ export class CharacterTools {
       consume,
       spellLevel,
       skipDialog,
-      declaredRiders,
+      riderIds,
+      riderOptions,
     });
 
     try {
@@ -617,7 +629,8 @@ export class CharacterTools {
           consume: consume ?? true,
           spellLevel,
           skipDialog: skipDialog ?? true, // Default to skipping dialogs for MCP automation
-          declaredRiders,
+          declaredRiders: normalizedDeclaredRiders,
+          arcaneDeclaredRiders: normalizedDeclaredRiders,
         },
       });
 
@@ -637,19 +650,14 @@ export class CharacterTools {
   }
 
   async handleUseItemOnTargets(args: any): Promise<any> {
-    const declaredRiderSchema = z
-      .object({
-        id: z.string().min(1, 'Rider id cannot be empty'),
-        spellLevel: z.number().optional(),
-      })
-      .passthrough();
     const schema = z.object({
       actorIdentifier: z.string().min(1, 'Actor identifier cannot be empty'),
       itemIdentifier: z.string().min(1, 'Item identifier cannot be empty'),
       targets: z.array(z.string()).min(1, 'At least one target is required'),
       activityIdentifier: z.string().optional(),
       spellLevel: z.number().optional(),
-      declaredRiders: z.array(declaredRiderSchema).optional(),
+      riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
+      riderOptions: z.record(z.record(z.unknown())).default({}),
     });
 
     const {
@@ -658,8 +666,10 @@ export class CharacterTools {
       targets,
       activityIdentifier,
       spellLevel,
-      declaredRiders,
+      riderIds,
+      riderOptions,
     } = schema.parse(args);
+    const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
 
     this.logger.info('Using item on targets', {
       actorIdentifier,
@@ -667,7 +677,8 @@ export class CharacterTools {
       targets,
       activityIdentifier,
       spellLevel,
-      declaredRiders,
+      riderIds,
+      riderOptions,
     });
 
     try {
@@ -678,7 +689,8 @@ export class CharacterTools {
         activityIdentifier,
         options: {
           spellLevel,
-          declaredRiders,
+          declaredRiders: normalizedDeclaredRiders,
+          arcaneDeclaredRiders: normalizedDeclaredRiders,
         },
       });
 
