@@ -5955,13 +5955,171 @@ export class FoundryDataAccess {
    * Find actor by name or ID
    */
   private findActorByIdentifier(identifier: string): any {
+    const normalized = identifier.startsWith('Actor.')
+      ? identifier.slice('Actor.'.length)
+      : identifier;
     return (
-      game.actors?.get(identifier) ||
+      game.actors?.get(normalized) ||
       game.actors?.getName(identifier) ||
+      game.actors?.getName(normalized) ||
       Array.from(game.actors || []).find(a =>
         a.name?.toLowerCase().includes(identifier.toLowerCase())
       )
     );
+  }
+
+  private findCurrentSceneTokenByIdentifier(identifier: string): any {
+    const canvasTokens = (canvas as any)?.tokens?.placeables ?? [];
+    const scene = (canvas as any)?.scene || (game.scenes as any)?.current;
+    const normalized = identifier.startsWith('Token.') ? identifier.split('.').pop()! : identifier;
+    const lower = normalized.toLowerCase();
+
+    const placeable = canvasTokens.find(
+      (token: any) =>
+        token.id === normalized ||
+        token.document?.id === normalized ||
+        token.document?.uuid === identifier ||
+        token.name?.toLowerCase() === lower ||
+        token.document?.name?.toLowerCase() === lower
+    );
+    if (placeable) return placeable;
+
+    const tokenDocument = scene?.tokens?.get(normalized);
+    return tokenDocument?.object ?? tokenDocument;
+  }
+
+  private tokenDisplayName(token: any): string {
+    return token?.name || token?.document?.name || token?.actor?.name || token?.id || 'Unknown';
+  }
+
+  private tokenDocument(token: any): any {
+    return token?.document ?? token;
+  }
+
+  private tokenActorId(token: any): string | undefined {
+    return token?.actor?.id || this.tokenDocument(token)?.actorId;
+  }
+
+  private namesFromTokenSet(tokens: any, exclude: any[] = []): string[] | undefined {
+    if (!tokens) return undefined;
+    const excludeIds = new Set(exclude.map(token => this.tokenDocument(token)?.id || token?.id));
+    return Array.from(tokens)
+      .filter((token: any) => !excludeIds.has(this.tokenDocument(token)?.id || token?.id))
+      .map((token: any) => this.tokenDisplayName(token));
+  }
+
+  private extractWorkflowSaveDetails(workflow: any, targets: any[]): any[] {
+    if (!workflow) return [];
+    const saveResults = Array.isArray(workflow.saveResults) ? workflow.saveResults : [];
+    const saveDC = workflow.saveDC ?? workflow.item?.system?.save?.dc;
+    const saveAbility =
+      workflow.saveItem?.system?.save?.ability ?? workflow.item?.system?.save?.ability;
+
+    return targets.map((token: any, index: number) => {
+      const saved = workflow.saves?.has?.(token) ?? false;
+      const failed = workflow.failedSaves?.has?.(token) ?? false;
+      const roll = saveResults[index];
+      return {
+        tokenId: this.tokenDocument(token)?.id,
+        name: this.tokenDisplayName(token),
+        saved:
+          saved ||
+          (typeof roll?.total === 'number' && typeof saveDC === 'number'
+            ? roll.total >= saveDC
+            : !failed),
+        saveTotal: roll?.total,
+        saveDC,
+        ability: saveAbility,
+        formula: roll?.formula,
+      };
+    });
+  }
+
+  private extractWorkflowDamage(workflow: any): any[] {
+    if (!workflow) return [];
+    const fromDetail = (details: any[], fallbackRolls: any[] = []) =>
+      (details ?? []).map((part: any, index: number) => ({
+        type: part.type,
+        formula: part.formula ?? fallbackRolls[index]?.formula,
+        total: part.damage ?? part.value ?? fallbackRolls[index]?.total,
+        applied: part.appliedDamage,
+        saveMultiplier: part.multiplier,
+      }));
+
+    const damage = [
+      ...fromDetail(workflow.damageDetail, workflow.damageRolls),
+      ...fromDetail(
+        workflow.otherDamageDetail,
+        workflow.otherDamageRoll ? [workflow.otherDamageRoll] : []
+      ),
+      ...fromDetail(workflow.bonusDamageDetail, workflow.bonusDamageRolls),
+    ];
+
+    return damage.filter(entry =>
+      Object.values(entry).some(value => value !== undefined && value !== null)
+    );
+  }
+
+  private extractTokenCombatState(token: any): any {
+    const actor = token?.actor;
+    if (!actor) return {};
+
+    const hp = actor.system?.attributes?.hp;
+    const ac = actor.system?.attributes?.ac;
+    const effects = Array.from(actor.effects?.contents ?? actor.effects ?? []).map(
+      (effect: any) => {
+        const statuses = effect.statuses
+          ? Array.from(effect.statuses)
+          : Array.isArray(effect.statuses)
+            ? effect.statuses
+            : [];
+        return {
+          id: effect.id,
+          name: effect.name || effect.label,
+          icon: effect.icon,
+          disabled: effect.disabled,
+          statuses,
+          duration: effect.duration
+            ? {
+                type: effect.duration.type,
+                seconds: effect.duration.seconds,
+                rounds: effect.duration.rounds,
+                turns: effect.duration.turns,
+                remaining: effect.duration.remaining,
+              }
+            : null,
+        };
+      }
+    );
+    const statuses = Array.from(
+      new Set(
+        effects
+          .flatMap((effect: any) => effect.statuses ?? [])
+          .concat(actor.statuses ? Array.from(actor.statuses) : [])
+      )
+    );
+
+    return {
+      hp: hp
+        ? {
+            value: hp.value ?? null,
+            max: hp.max ?? null,
+            temp: hp.temp ?? 0,
+            tempmax: hp.tempmax ?? 0,
+            damage:
+              typeof hp.max === 'number' && typeof hp.value === 'number' ? hp.max - hp.value : null,
+          }
+        : undefined,
+      ac: ac
+        ? {
+            value: ac.value ?? null,
+            calc: ac.calc,
+            flat: ac.flat,
+          }
+        : undefined,
+      effects,
+      statuses,
+    };
   }
 
   /**
@@ -6389,6 +6547,110 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Create scene tokens from existing world actors without importing from compendium.
+   */
+  async createTokenFromActor(data: {
+    tokens: Array<{
+      actorIdentifier: string;
+      name?: string;
+      x: number;
+      y: number;
+      actorLink?: boolean;
+      disposition?: -1 | 0 | 1;
+      width?: number;
+      height?: number;
+      hidden?: boolean;
+      rotation?: number;
+      elevation?: number;
+    }>;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('modifyScene', {});
+    if (!permissionCheck.allowed) {
+      throw new Error(`${ERROR_MESSAGES.ACCESS_DENIED}: ${permissionCheck.reason}`);
+    }
+
+    const scene = (canvas as any)?.scene || (game.scenes as any).current;
+    if (!scene) {
+      throw new Error('No active scene found');
+    }
+
+    const createdTokens: any[] = [];
+    const errors: any[] = [];
+
+    for (const tokenRequest of data.tokens) {
+      try {
+        const actor = this.findActorByIdentifier(tokenRequest.actorIdentifier);
+        if (!actor) {
+          throw new Error(`Actor not found: ${tokenRequest.actorIdentifier}`);
+        }
+
+        const overrides: Record<string, any> = {
+          x: tokenRequest.x,
+          y: tokenRequest.y,
+          actorLink: tokenRequest.actorLink ?? false,
+        };
+        for (const key of [
+          'name',
+          'disposition',
+          'width',
+          'height',
+          'hidden',
+          'rotation',
+          'elevation',
+        ]) {
+          const value = (tokenRequest as any)[key];
+          if (value !== undefined) overrides[key] = value;
+        }
+
+        const tokenDocument =
+          typeof actor.getTokenDocument === 'function'
+            ? await actor.getTokenDocument(overrides)
+            : new (CONFIG as any).Token.documentClass({
+                ...(actor.prototypeToken?.toObject?.() ?? {}),
+                ...overrides,
+                actorId: actor.id,
+              });
+        const tokenData = tokenDocument.toObject ? tokenDocument.toObject() : tokenDocument;
+        const [created] = await scene.createEmbeddedDocuments('Token', [tokenData]);
+
+        createdTokens.push({
+          id: created.id,
+          name: created.name,
+          actorId: created.actorId,
+          actorName: actor.name,
+          actorLink: created.actorLink,
+          x: created.x,
+          y: created.y,
+          disposition: created.disposition,
+          hidden: created.hidden,
+        });
+      } catch (error) {
+        errors.push({
+          actorIdentifier: tokenRequest.actorIdentifier,
+          name: tokenRequest.name,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    this.auditLog(
+      'createTokenFromActor',
+      { requested: data.tokens.length, created: createdTokens.length, errors: errors.length },
+      errors.length === 0 ? 'success' : 'failure'
+    );
+
+    return {
+      success: errors.length === 0,
+      sceneId: scene.id,
+      sceneName: scene.name,
+      tokens: createdTokens,
+      errors,
+    };
+  }
+
+  /**
    * Move a token to a new position on the scene
    */
   async moveToken(data: {
@@ -6584,6 +6846,9 @@ export class FoundryDataAccess {
       if (!token) {
         throw new Error(`Token ${data.tokenId} not found in current scene`);
       }
+      const tokenObject =
+        token.object ?? this.findCurrentSceneTokenByIdentifier(data.tokenId) ?? token;
+      const combatState = this.extractTokenCombatState(tokenObject);
 
       // Return flat structure that matches MCP server expectations
       return {
@@ -6611,6 +6876,8 @@ export class FoundryDataAccess {
             }
           : null,
         actorLink: token.actorLink,
+        isLinked: token.actorLink,
+        ...combatState,
       };
     } catch (error) {
       throw new Error(
@@ -7170,6 +7437,8 @@ export class FoundryDataAccess {
     itemCardId?: string;
     failedSaves?: string[];
     saves?: string[];
+    targetDetails?: any[];
+    damage?: any[];
     automation?: 'full' | 'partial';
   }> {
     this.validateFoundryState();
@@ -7229,12 +7498,11 @@ export class FoundryDataAccess {
 
         const workflow = await midi.completeItemUse(itemAny, usageConfig, { configure: false }, {});
 
-        const failedSaves = workflow?.failedSaves
-          ? Array.from(workflow.failedSaves).map((token: any) => token.name)
-          : undefined;
-        const saves = workflow?.saves
-          ? Array.from(workflow.saves).map((token: any) => token.name)
-          : undefined;
+        const savedTokens = Array.from(workflow?.saves ?? []);
+        const failedSaves = this.namesFromTokenSet(workflow?.failedSaves, savedTokens);
+        const saves = this.namesFromTokenSet(workflow?.saves);
+        const targetDetails = this.extractWorkflowSaveDetails(workflow, resolvedTargets.tokens);
+        const damage = this.extractWorkflowDamage(workflow);
 
         this.auditLog(
           'useItemOnTargets',
@@ -7259,6 +7527,8 @@ export class FoundryDataAccess {
           itemCardId?: string;
           failedSaves?: string[];
           saves?: string[];
+          targetDetails?: any[];
+          damage?: any[];
           automation?: 'full' | 'partial';
         } = {
           success: true,
@@ -7274,6 +7544,8 @@ export class FoundryDataAccess {
 
         if (failedSaves) result.failedSaves = failedSaves;
         if (saves) result.saves = saves;
+        if (targetDetails.length > 0) result.targetDetails = targetDetails;
+        if (damage.length > 0) result.damage = damage;
 
         return result;
       } catch (error) {
@@ -7309,6 +7581,275 @@ export class FoundryDataAccess {
     }
 
     throw new Error(`Item "${item.name}" cannot be used: no supported use method found`);
+  }
+
+  /**
+   * Use an item from an explicit current-scene source token against explicit
+   * current-scene target tokens. This preserves synthetic actor state for
+   * unlinked combat tokens.
+   */
+  async useItemOnTokenTargets(params: {
+    sourceTokenId: string;
+    itemIdentifier: string;
+    targetTokenIds: string[];
+    activityIdentifier?: string | undefined;
+    options?:
+      | {
+          spellLevel?: number | undefined;
+          versatile?: boolean | undefined;
+          declaredRiders?: Array<Record<string, any>> | undefined;
+        }
+      | undefined;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const {
+      sourceTokenId,
+      itemIdentifier,
+      targetTokenIds,
+      activityIdentifier,
+      options = {},
+    } = params;
+    const sourceToken = this.findCurrentSceneTokenByIdentifier(sourceTokenId);
+    if (!sourceToken) {
+      throw new Error(`Source token not found on current scene: ${sourceTokenId}`);
+    }
+    const sourceActor = sourceToken.actor;
+    if (!sourceActor) {
+      throw new Error(`Source token "${this.tokenDisplayName(sourceToken)}" has no actor`);
+    }
+
+    const targetTokens = targetTokenIds.map(targetTokenId => {
+      const token = this.findCurrentSceneTokenByIdentifier(targetTokenId);
+      if (!token) throw new Error(`Target token not found on current scene: ${targetTokenId}`);
+      return token;
+    });
+
+    const item = sourceActor.items.find(
+      (i: any) => i.id === itemIdentifier || i.name.toLowerCase() === itemIdentifier.toLowerCase()
+    );
+    if (!item) {
+      throw new Error(
+        `Item "${itemIdentifier}" not found on source token actor "${sourceActor.name}"`
+      );
+    }
+
+    const itemAny = item as any;
+    const midi = (globalThis as any).MidiQOL;
+    const activities = this.getUsableItemActivities(itemAny);
+    const activity = this.resolveItemActivity(activities, activityIdentifier);
+    const targetUuids = targetTokens
+      .map((token: any) => this.tokenDocument(token)?.uuid)
+      .filter(Boolean);
+    const declaredRiders = options.declaredRiders ?? [];
+
+    this.setUserTargets(targetTokens);
+
+    if (midi && typeof midi.completeItemUse === 'function') {
+      try {
+        const usageConfig: Record<string, any> = {
+          chooseActivity: false,
+          configure: false,
+          createMessage: true,
+          arcaneDeclaredRiders: declaredRiders,
+          midiOptions: {
+            targetUuids,
+            targetsToUse: new Set(targetTokens),
+            ignoreUserTargets: false,
+            fastForward: true,
+            arcaneDeclaredRiders: declaredRiders,
+            workflowOptions: {
+              targetUuids,
+              sourceTokenUuid: this.tokenDocument(sourceToken)?.uuid,
+              arcaneDeclaredRiders: declaredRiders,
+            },
+          },
+        };
+
+        if (activity?.id) usageConfig.activity = activity.id;
+        if (options.spellLevel !== undefined) {
+          usageConfig.slotLevel = options.spellLevel;
+          usageConfig.level = options.spellLevel;
+        }
+
+        const workflow = await midi.completeItemUse(itemAny, usageConfig, { configure: false }, {});
+        const savedTokens = Array.from(workflow?.saves ?? []);
+        const failedSaves = this.namesFromTokenSet(workflow?.failedSaves, savedTokens);
+        const saves = this.namesFromTokenSet(workflow?.saves);
+        const targetDetails = this.extractWorkflowSaveDetails(workflow, targetTokens);
+
+        this.auditLog(
+          'useItemOnTokenTargets',
+          {
+            sourceTokenId: this.tokenDocument(sourceToken)?.id,
+            actorId: sourceActor.id,
+            itemId: item.id,
+            itemName: item.name,
+            targets: targetTokens.map(token => this.tokenDisplayName(token)),
+            workflowId: workflow?.id,
+          },
+          'success'
+        );
+
+        const result: any = {
+          success: true,
+          status: 'completed',
+          automation: 'full',
+          sourceTokenId: this.tokenDocument(sourceToken)?.id,
+          sourceTokenName: this.tokenDisplayName(sourceToken),
+          sourceActorId: this.tokenActorId(sourceToken),
+          sourceActorName: sourceActor.name,
+          itemId: item.id,
+          itemName: item.name,
+          targetTokenIds: targetTokens.map(token => this.tokenDocument(token)?.id),
+          targetTokenNames: targetTokens.map(token => this.tokenDisplayName(token)),
+          workflowId: workflow?.id,
+          itemCardId: workflow?.itemCardId,
+          targets: targetDetails,
+          damage: this.extractWorkflowDamage(workflow),
+        };
+
+        if (failedSaves) result.failedSaves = failedSaves;
+        if (saves) result.saves = saves;
+
+        return result;
+      } catch (error) {
+        this.auditLog(
+          'useItemOnTokenTargets',
+          {
+            sourceTokenId,
+            itemIdentifier,
+            targetTokenIds,
+          },
+          'failure',
+          error instanceof Error ? error.message : 'Unknown error'
+        );
+        throw new Error(
+          `Failed to use item "${item.name}" from token "${this.tokenDisplayName(sourceToken)}": ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`
+        );
+      }
+    }
+
+    if (typeof itemAny.use === 'function') {
+      itemAny.use({ createMessage: true }).catch((err: Error) => {
+        console.error(`[foundry-mcp-bridge] Error using item ${item.name}:`, err);
+      });
+
+      return {
+        success: true,
+        status: 'initiated',
+        automation: 'partial',
+        message: `Midi-QOL completeItemUse is not available. Set Foundry targets and initiated normal item use for ${this.tokenDisplayName(sourceToken)} using ${item.name}.`,
+        sourceTokenId: this.tokenDocument(sourceToken)?.id,
+        sourceTokenName: this.tokenDisplayName(sourceToken),
+        sourceActorId: this.tokenActorId(sourceToken),
+        sourceActorName: sourceActor.name,
+        itemId: item.id,
+        itemName: item.name,
+        targetTokenIds: targetTokens.map(token => this.tokenDocument(token)?.id),
+        targetTokenNames: targetTokens.map(token => this.tokenDisplayName(token)),
+      };
+    }
+
+    throw new Error(`Item "${item.name}" cannot be used: no supported use method found`);
+  }
+
+  async getItemUseResult(params: { itemCardId: string; scanForward?: number }): Promise<any> {
+    this.validateFoundryState();
+
+    const { itemCardId, scanForward = 8 } = params;
+    const messages = Array.from((game.messages as any)?.contents ?? []);
+    const itemMessageIndex = messages.findIndex((message: any) => message.id === itemCardId);
+    if (itemMessageIndex < 0) {
+      return {
+        status: 'not-found',
+        success: false,
+        itemCardId,
+        reason: 'item-card-not-found',
+      };
+    }
+
+    const itemMessage: any = messages[itemMessageIndex];
+    const relatedMessages = messages.slice(
+      itemMessageIndex,
+      itemMessageIndex + Math.max(1, scanForward + 1)
+    );
+    const flags = itemMessage.flags ?? {};
+    const midiFlags = flags['midi-qol'] ?? {};
+    const dnd5eFlags = flags.dnd5e ?? {};
+    const speaker = itemMessage.speaker ?? {};
+    const sourceToken = speaker.token
+      ? this.findCurrentSceneTokenByIdentifier(speaker.token)
+      : null;
+    const sourceActor =
+      sourceToken?.actor ?? (speaker.actor ? game.actors?.get(speaker.actor) : null);
+    const targetUuids = [
+      ...(midiFlags.targetUuids ?? []),
+      ...(midiFlags.hitTargetUuids ?? []),
+      ...(midiFlags.failedSaveUuids ?? []),
+      ...(midiFlags.saveUuids ?? []),
+    ];
+    const uniqueTargetUuids = Array.from(new Set(targetUuids.filter(Boolean)));
+    const targets = uniqueTargetUuids.map((uuid: string) => {
+      const tokenId = uuid.split('.').pop();
+      const token = tokenId ? this.findCurrentSceneTokenByIdentifier(tokenId) : null;
+      return {
+        tokenId,
+        name: token ? this.tokenDisplayName(token) : undefined,
+        actorId: token ? this.tokenActorId(token) : undefined,
+        uuid,
+      };
+    });
+    const failedSaveUuidSet = new Set((midiFlags.failedSaveUuids ?? []).filter(Boolean));
+    const saveUuidSet = new Set((midiFlags.saveUuids ?? []).filter(Boolean));
+
+    return {
+      status: relatedMessages.length > 1 || itemMessage ? 'completed' : 'pending',
+      success: true,
+      itemCardId,
+      workflowId: midiFlags.workflowId ?? itemMessage.uuid,
+      source: {
+        tokenId: speaker.token,
+        name: sourceToken ? this.tokenDisplayName(sourceToken) : sourceActor?.name,
+        actorId: speaker.actor || sourceActor?.id,
+      },
+      targets,
+      saves: targets
+        .filter((target: any) => target.uuid && saveUuidSet.has(target.uuid))
+        .map((target: any) => ({
+          targetTokenId: target.tokenId,
+          name: target.name,
+          success: true,
+        })),
+      failedSaves: targets
+        .filter(
+          (target: any) =>
+            target.uuid && failedSaveUuidSet.has(target.uuid) && !saveUuidSet.has(target.uuid)
+        )
+        .map((target: any) => ({
+          targetTokenId: target.tokenId,
+          name: target.name,
+          success: false,
+        })),
+      attack: {
+        total: midiFlags.attackTotal,
+        hit: midiFlags.isHit,
+      },
+      damage: midiFlags.damageDetail ?? midiFlags.damageList ?? [],
+      item: {
+        id: midiFlags.itemId ?? dnd5eFlags.item?.id,
+        uuid: midiFlags.itemUuid ?? dnd5eFlags.item?.uuid,
+        name: midiFlags.itemName ?? dnd5eFlags.item?.name,
+      },
+      messages: relatedMessages.map((message: any) => ({
+        id: message.id,
+        speaker: message.speaker,
+        type: message.id === itemCardId ? 'item-card' : 'followup',
+        hasRolls: (message.rolls?.length ?? 0) > 0,
+      })),
+    };
   }
 
   private resolveItemUseTargets(actor: any, targets: string[]): { tokens: any[]; names: string[] } {

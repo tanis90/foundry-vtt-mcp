@@ -1382,7 +1382,10 @@ async function startBackend(): Promise<void> {
         type: 'object',
         properties: {
           commandId: { type: 'string' },
-          state: { type: 'string', enum: ['idle', 'recording', 'transcribing', 'draft', 'executing', 'done', 'error'] },
+          state: {
+            type: 'string',
+            enum: ['idle', 'recording', 'transcribing', 'draft', 'executing', 'done', 'error'],
+          },
           transcript: { type: 'string' },
           provider: { type: 'string' },
           latencyMs: { type: 'number' },
@@ -1419,7 +1422,7 @@ async function startBackend(): Promise<void> {
   ];
 
   // Profile-based tool filtering
-  const profile = process.env.FOUNDRY_MCP_PROFILE || 'combat-runtime';
+  const profile = process.env.FOUNDRY_MCP_PROFILE || 'gm-full';
   const combatRuntimeAllowList = new Set([
     'get-world-info',
     'list-characters',
@@ -1428,23 +1431,27 @@ async function startBackend(): Promise<void> {
     'get-character-entity',
     'list-scenes',
     'get-current-scene',
+    'create-token-from-actor',
     'get-token-details',
     'move-token',
     'update-token',
     'toggle-token-condition',
     'request-player-rolls',
     'use-item',
+    'use-item-on-targets',
+    'use-item-on-token-targets',
+    'get-item-use-result',
   ]);
-  const internalControlAllowList = new Set([
-    'publish-voice-state',
-    'get-voice-state',
-  ]);
+  const internalControlAllowList = new Set(['publish-voice-state', 'get-voice-state']);
 
   function filterTools(tools: any[], p: string): any[] {
     if (p === 'gm-full') return tools;
     if (p === 'internal-control') return tools.filter(t => internalControlAllowList.has(t.name));
-    // default combat-runtime
-    return tools.filter(t => combatRuntimeAllowList.has(t.name));
+    if (p === 'combat-runtime' || p === 'combat')
+      return tools.filter(t => combatRuntimeAllowList.has(t.name));
+    // Unknown profiles fall back to full GM access.
+    logger.warn('Unknown MCP profile, falling back to gm-full', { profile: p });
+    return tools;
   }
 
   const allTools = filterTools(rawTools, profile);
@@ -1540,6 +1547,16 @@ async function startBackend(): Promise<void> {
 
                 case 'use-item-on-targets':
                   result = await characterTools.handleUseItemOnTargets(args);
+
+                  break;
+
+                case 'use-item-on-token-targets':
+                  result = await characterTools.handleUseItemOnTokenTargets(args);
+
+                  break;
+
+                case 'get-item-use-result':
+                  result = await characterTools.handleGetItemUseResult(args);
 
                   break;
 
@@ -1686,6 +1703,11 @@ async function startBackend(): Promise<void> {
 
                 // Token manipulation tools
 
+                case 'create-token-from-actor':
+                  result = await tokenManipulationTools.handleCreateTokenFromActor(args);
+
+                  break;
+
                 case 'move-token':
                   result = await tokenManipulationTools.handleMoveToken(args);
 
@@ -1765,7 +1787,9 @@ async function startBackend(): Promise<void> {
                         },
                       });
                     } catch (e) {
-                      logger.warn('Failed to send voice state to Foundry', { error: (e as any)?.message });
+                      logger.warn('Failed to send voice state to Foundry', {
+                        error: (e as any)?.message,
+                      });
                     }
                   }
                   break;

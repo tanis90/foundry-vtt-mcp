@@ -168,7 +168,7 @@ export class CharacterTools {
       {
         name: 'use-item-on-targets',
         description:
-          'Use an item against explicit current-scene token targets and require those targets to enter the automated workflow. Best for D&D 5e midi-qol attacks, saves, and targeted effects such as Abjure Enemy. Requires targets. Supports ["self"] for self-targeted effects. If an item has multiple usable activities, pass activityIdentifier instead of guessing.',
+          'Use an item against explicit current-scene token targets and require those targets to enter the automated workflow. Actor or current-scene source token using the item (name or ID). For combat, prefer use-item-on-token-targets with a source token ID. Requires targets. Supports ["self"] for self-targeted effects. If an item has multiple usable activities, pass activityIdentifier instead of guessing.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -214,6 +214,75 @@ export class CharacterTools {
             },
           },
           required: ['actorIdentifier', 'itemIdentifier', 'targets'],
+        },
+      },
+      {
+        name: 'use-item-on-token-targets',
+        description:
+          'Token-first combat item use. Resolves the source and all targets only from current-scene tokens, then uses the source token synthetic actor for D&D 5e midi-qol automation. Use this for unlinked NPC combat tokens and duplicate tokens from the same actor.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sourceTokenId: {
+              type: 'string',
+              description: 'Current-scene source token ID or exact token name using the item',
+            },
+            itemIdentifier: {
+              type: 'string',
+              description: 'Item name or ID on the source token actor',
+            },
+            targetTokenIds: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string' },
+              description: 'Current-scene target token IDs or exact token names',
+            },
+            activityIdentifier: {
+              type: 'string',
+              description:
+                'Optional activity id, name, or type when an item has multiple usable activities.',
+            },
+            spellLevel: {
+              type: 'number',
+              description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
+            },
+            riderIds: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string', minLength: 1 },
+              description:
+                'Rider identifiers to declare, for example ["phb-great-weapon-master","divine-smite"].',
+            },
+            riderOptions: {
+              type: 'object',
+              description:
+                'Optional per-rider options, keyed by rider id. Example: {"divine-smite": {"spellLevel": 2}}.',
+              additionalProperties: {
+                type: 'object',
+                additionalProperties: true,
+              },
+            },
+          },
+          required: ['sourceTokenId', 'itemIdentifier', 'targetTokenIds'],
+        },
+      },
+      {
+        name: 'get-item-use-result',
+        description:
+          'Get a conservative QA summary for an item use by Foundry chat item card ID. Scans nearby follow-up chat messages and midi-qol/dnd5e flags for source, targets, saves, damage, and debug message IDs.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            itemCardId: {
+              type: 'string',
+              description: 'Foundry ChatMessage/item card ID returned by item use',
+            },
+            scanForward: {
+              type: 'number',
+              description: 'How many later chat messages to inspect. Defaults to 8.',
+            },
+          },
+          required: ['itemCardId'],
         },
       },
       {
@@ -706,6 +775,85 @@ export class CharacterTools {
       this.logger.error('Failed to use item on targets', error);
       throw new Error(
         `Failed to use item "${itemIdentifier}" on targets: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleUseItemOnTokenTargets(args: any): Promise<any> {
+    const schema = z.object({
+      sourceTokenId: z.string().min(1, 'Source token ID cannot be empty'),
+      itemIdentifier: z.string().min(1, 'Item identifier cannot be empty'),
+      targetTokenIds: z.array(z.string()).min(1, 'At least one target token is required'),
+      activityIdentifier: z.string().optional(),
+      spellLevel: z.number().optional(),
+      riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
+      riderOptions: z.record(z.record(z.unknown())).default({}),
+    });
+
+    const {
+      sourceTokenId,
+      itemIdentifier,
+      targetTokenIds,
+      activityIdentifier,
+      spellLevel,
+      riderIds,
+      riderOptions,
+    } = schema.parse(args);
+    const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
+
+    this.logger.info('Using item on token targets', {
+      sourceTokenId,
+      itemIdentifier,
+      targetTokenIds,
+      activityIdentifier,
+      spellLevel,
+      riderIds,
+      riderOptions,
+    });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.useItemOnTokenTargets', {
+        sourceTokenId,
+        itemIdentifier,
+        targetTokenIds,
+        activityIdentifier,
+        options: {
+          spellLevel,
+          declaredRiders: normalizedDeclaredRiders,
+          arcaneDeclaredRiders: normalizedDeclaredRiders,
+        },
+      });
+    } catch (error) {
+      this.logger.error('Failed to use item on token targets', error);
+      throw new Error(
+        `Failed to use item "${itemIdentifier}" from token "${sourceTokenId}": ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleGetItemUseResult(args: any): Promise<any> {
+    const schema = z.object({
+      itemCardId: z.string().min(1, 'Item card ID cannot be empty'),
+      scanForward: z.number().int().min(0).max(50).optional(),
+    });
+
+    const { itemCardId, scanForward } = schema.parse(args);
+
+    this.logger.info('Getting item use result', { itemCardId, scanForward });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.getItemUseResult', {
+        itemCardId,
+        scanForward: scanForward ?? 8,
+      });
+    } catch (error) {
+      this.logger.error('Failed to get item use result', error);
+      throw new Error(
+        `Failed to get item use result "${itemCardId}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

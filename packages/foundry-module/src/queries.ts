@@ -88,6 +88,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.findActor`] = this.handleFindActor.bind(this);
 
     // Token manipulation queries
+    CONFIG.queries[`${modulePrefix}.createTokenFromActor`] =
+      this.handleCreateTokenFromActor.bind(this);
     CONFIG.queries[`${modulePrefix}.moveToken`] = this.handleMoveToken.bind(this);
     CONFIG.queries[`${modulePrefix}.updateToken`] = this.handleUpdateToken.bind(this);
     CONFIG.queries[`${modulePrefix}.deleteTokens`] = this.handleDeleteTokens.bind(this);
@@ -107,6 +109,9 @@ export class QueryHandlers {
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
     CONFIG.queries[`${modulePrefix}.useItemOnTargets`] = this.handleUseItemOnTargets.bind(this);
+    CONFIG.queries[`${modulePrefix}.useItemOnTokenTargets`] =
+      this.handleUseItemOnTokenTargets.bind(this);
+    CONFIG.queries[`${modulePrefix}.getItemUseResult`] = this.handleGetItemUseResult.bind(this);
     CONFIG.queries[`${modulePrefix}.rest`] = this.handleRest.bind(this);
     CONFIG.queries[`${modulePrefix}.grantBardicInspiration`] =
       this.handleGrantBardicInspiration.bind(this);
@@ -126,6 +131,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.updateWorldItems`] = this.handleUpdateWorldItems.bind(this);
 
     // Phase 7: Token manipulation queries
+    CONFIG.queries[`${modulePrefix}.create-token-from-actor`] =
+      this.handleCreateTokenFromActor.bind(this);
     CONFIG.queries[`${modulePrefix}.move-token`] = this.handleMoveToken.bind(this);
     CONFIG.queries[`${modulePrefix}.update-token`] = this.handleUpdateToken.bind(this);
     CONFIG.queries[`${modulePrefix}.delete-tokens`] = this.handleDeleteTokens.bind(this);
@@ -134,6 +141,9 @@ export class QueryHandlers {
       this.handleToggleTokenCondition.bind(this);
     CONFIG.queries[`${modulePrefix}.get-available-conditions`] =
       this.handleGetAvailableConditions.bind(this);
+    CONFIG.queries[`${modulePrefix}.use-item-on-token-targets`] =
+      this.handleUseItemOnTokenTargets.bind(this);
+    CONFIG.queries[`${modulePrefix}.get-item-use-result`] = this.handleGetItemUseResult.bind(this);
   }
 
   /**
@@ -1229,6 +1239,48 @@ export class QueryHandlers {
 
   // ===== PHASE 7: TOKEN MANIPULATION HANDLERS =====
 
+  private async handleCreateTokenFromActor(data: {
+    tokens: Array<{
+      actorIdentifier: string;
+      name?: string;
+      x: number;
+      y: number;
+      actorLink?: boolean;
+      disposition?: -1 | 0 | 1;
+      width?: number;
+      height?: number;
+      hidden?: boolean;
+      rotation?: number;
+      elevation?: number;
+    }>;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!Array.isArray(data?.tokens) || data.tokens.length === 0) {
+        throw new Error('tokens array is required and must not be empty');
+      }
+
+      for (const token of data.tokens) {
+        if (!token.actorIdentifier) throw new Error('actorIdentifier is required for every token');
+        if (typeof token.x !== 'number' || typeof token.y !== 'number') {
+          throw new Error('x and y coordinates are required and must be numbers for every token');
+        }
+      }
+
+      return await this.dataAccess.createTokenFromActor(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to create token from actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
   /**
    * Handle move token request
    */
@@ -1486,6 +1538,76 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to use item on targets: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleUseItemOnTokenTargets(data: {
+    sourceTokenId: string;
+    itemIdentifier: string;
+    targetTokenIds: string[];
+    activityIdentifier?: string;
+    options?: {
+      spellLevel?: number;
+      versatile?: boolean;
+      declaredRiders?: Array<Record<string, any>>;
+    };
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.sourceTokenId) {
+        throw new Error('sourceTokenId is required');
+      }
+      if (!data.itemIdentifier) {
+        throw new Error('itemIdentifier is required');
+      }
+      if (!Array.isArray(data.targetTokenIds) || data.targetTokenIds.length === 0) {
+        throw new Error('targetTokenIds are required');
+      }
+
+      return await this.dataAccess.useItemOnTokenTargets({
+        sourceTokenId: data.sourceTokenId,
+        itemIdentifier: data.itemIdentifier,
+        targetTokenIds: data.targetTokenIds,
+        activityIdentifier: data.activityIdentifier,
+        options: data.options,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to use item on token targets: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleGetItemUseResult(data: {
+    itemCardId: string;
+    scanForward?: number;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.itemCardId) {
+        throw new Error('itemCardId is required');
+      }
+
+      return await this.dataAccess.getItemUseResult({
+        itemCardId: data.itemCardId,
+        ...(data.scanForward !== undefined ? { scanForward: data.scanForward } : {}),
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to get item use result: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

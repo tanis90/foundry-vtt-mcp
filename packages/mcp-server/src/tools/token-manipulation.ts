@@ -22,6 +22,74 @@ export class TokenManipulationTools {
   getToolDefinitions() {
     return [
       {
+        name: 'create-token-from-actor',
+        description:
+          "Create one or more scene tokens from existing world actors. This uses each actor's prototype token and does not import from compendium or create world actors.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tokens: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                properties: {
+                  actorIdentifier: {
+                    type: 'string',
+                    description: 'Existing world actor ID, Actor.uuid, exact name, or partial name',
+                  },
+                  name: {
+                    type: 'string',
+                    description: 'Optional token name. Defaults to the actor/prototype token name.',
+                  },
+                  x: {
+                    type: 'number',
+                    description: 'Token X coordinate in pixels on the current scene',
+                  },
+                  y: {
+                    type: 'number',
+                    description: 'Token Y coordinate in pixels on the current scene',
+                  },
+                  actorLink: {
+                    type: 'boolean',
+                    description:
+                      'Whether the token should be linked to the world actor. Defaults to false.',
+                    default: false,
+                  },
+                  disposition: {
+                    type: 'number',
+                    description: 'Token disposition: -1 (hostile), 0 (neutral), 1 (friendly)',
+                    enum: [-1, 0, 1],
+                  },
+                  width: {
+                    type: 'number',
+                    description: 'Token width in grid units',
+                  },
+                  height: {
+                    type: 'number',
+                    description: 'Token height in grid units',
+                  },
+                  hidden: {
+                    type: 'boolean',
+                    description: 'Whether the token is hidden from players',
+                  },
+                  rotation: {
+                    type: 'number',
+                    description: 'Token rotation in degrees',
+                  },
+                  elevation: {
+                    type: 'number',
+                    description: 'Token elevation in distance units',
+                  },
+                },
+                required: ['actorIdentifier', 'x', 'y'],
+              },
+            },
+          },
+          required: ['tokens'],
+        },
+      },
+      {
         name: 'move-token',
         description:
           'Move a token to a new position on the current scene. Can optionally animate the movement.',
@@ -179,6 +247,48 @@ export class TokenManipulationTools {
         },
       },
     ];
+  }
+
+  async handleCreateTokenFromActor(args: any): Promise<any> {
+    const tokenRequestSchema = z.object({
+      actorIdentifier: z.string().min(1, 'Actor identifier cannot be empty'),
+      name: z.string().optional(),
+      x: z.number(),
+      y: z.number(),
+      actorLink: z.boolean().optional().default(false),
+      disposition: z.union([z.literal(-1), z.literal(0), z.literal(1)]).optional(),
+      width: z.number().positive().optional(),
+      height: z.number().positive().optional(),
+      hidden: z.boolean().optional(),
+      rotation: z.number().optional(),
+      elevation: z.number().optional(),
+    });
+    const schema = z.object({
+      tokens: z.array(tokenRequestSchema).min(1, 'At least one token is required'),
+    });
+
+    const { tokens } = schema.parse(args);
+
+    this.logger.info('Creating tokens from existing actors', { count: tokens.length });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.create-token-from-actor', {
+        tokens,
+      });
+
+      this.logger.debug('Created tokens from actors', {
+        success: result.success,
+        created: result.tokens?.length ?? 0,
+        errors: result.errors?.length ?? 0,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to create tokens from actors', error);
+      throw new Error(
+        `Failed to create tokens from actors: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleMoveToken(args: any): Promise<any> {
@@ -345,6 +455,16 @@ export class TokenManipulationTools {
         elevation: tokenData.elevation,
         lockRotation: tokenData.lockRotation,
       },
+      combat: {
+        hp: tokenData.hp,
+        ac: tokenData.ac,
+        effects: tokenData.effects ?? [],
+        statuses: tokenData.statuses ?? [],
+      },
+      hp: tokenData.hp,
+      ac: tokenData.ac,
+      effects: tokenData.effects ?? [],
+      statuses: tokenData.statuses ?? [],
       actor: tokenData.actorData
         ? {
             id: tokenData.actorId,
