@@ -34,11 +34,13 @@ import { MapGenerationTools } from './tools/map-generation.js';
 
 import { TokenManipulationTools } from './tools/token-manipulation.js';
 
+import { CombatControlTools } from './tools/combat-control.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 const CONTROL_HOST = '127.0.0.1';
 
-const CONTROL_PORT = 31414;
+const CONTROL_PORT = parseInt(process.env.FOUNDRY_MCP_CONTROL_PORT || '31414', 10);
 
 const LOCK_FILE = path.join(os.tmpdir(), 'foundry-mcp-backend.lock');
 
@@ -1177,6 +1179,8 @@ async function startBackend(): Promise<void> {
 
   const tokenManipulationTools = new TokenManipulationTools({ foundryClient, logger });
 
+  const combatControlTools = new CombatControlTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1417,6 +1421,7 @@ async function startBackend(): Promise<void> {
     ...campaignManagementTools.getToolDefinitions(),
     ...ownershipTools.getToolDefinitions(),
     ...tokenManipulationTools.getToolDefinitions(),
+    ...combatControlTools.getToolDefinitions(),
     ...mapGenerationTools.getToolDefinitions(),
     ...voiceStateTools,
   ];
@@ -1441,6 +1446,19 @@ async function startBackend(): Promise<void> {
     'use-item-on-targets',
     'use-item-on-token-targets',
     'get-item-use-result',
+    'list-chat-messages',
+    'get-chat-message',
+    'delete-chat-messages',
+    'get-combat-state',
+    'start-combat',
+    'add-tokens-to-combat',
+    'roll-combat-initiative',
+    'set-combatant-initiative',
+    'next-combat-turn',
+    'previous-combat-turn',
+    'next-combat-round',
+    'set-combatant-defeated',
+    'end-combat',
   ]);
   const internalControlAllowList = new Set(['publish-voice-state', 'get-voice-state']);
 
@@ -1557,6 +1575,21 @@ async function startBackend(): Promise<void> {
 
                 case 'get-item-use-result':
                   result = await characterTools.handleGetItemUseResult(args);
+
+                  break;
+
+                case 'list-chat-messages':
+                  result = await characterTools.handleListChatMessages(args);
+
+                  break;
+
+                case 'get-chat-message':
+                  result = await characterTools.handleGetChatMessage(args);
+
+                  break;
+
+                case 'delete-chat-messages':
+                  result = await characterTools.handleDeleteChatMessages(args);
 
                   break;
 
@@ -1735,6 +1768,22 @@ async function startBackend(): Promise<void> {
 
                 case 'get-available-conditions':
                   result = await tokenManipulationTools.handleGetAvailableConditions(args);
+
+                  break;
+
+                // Combat control tools
+
+                case 'get-combat-state':
+                case 'start-combat':
+                case 'add-tokens-to-combat':
+                case 'roll-combat-initiative':
+                case 'set-combatant-initiative':
+                case 'next-combat-turn':
+                case 'previous-combat-turn':
+                case 'next-combat-round':
+                case 'set-combatant-defeated':
+                case 'end-combat':
+                  result = await combatControlTools.handleToolCall(name, args);
 
                   break;
 

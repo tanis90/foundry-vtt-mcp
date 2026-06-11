@@ -112,6 +112,9 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.useItemOnTokenTargets`] =
       this.handleUseItemOnTokenTargets.bind(this);
     CONFIG.queries[`${modulePrefix}.getItemUseResult`] = this.handleGetItemUseResult.bind(this);
+    CONFIG.queries[`${modulePrefix}.listChatMessages`] = this.handleListChatMessages.bind(this);
+    CONFIG.queries[`${modulePrefix}.getChatMessage`] = this.handleGetChatMessage.bind(this);
+    CONFIG.queries[`${modulePrefix}.deleteChatMessages`] = this.handleDeleteChatMessages.bind(this);
     CONFIG.queries[`${modulePrefix}.rest`] = this.handleRest.bind(this);
     CONFIG.queries[`${modulePrefix}.grantBardicInspiration`] =
       this.handleGrantBardicInspiration.bind(this);
@@ -144,6 +147,27 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.use-item-on-token-targets`] =
       this.handleUseItemOnTokenTargets.bind(this);
     CONFIG.queries[`${modulePrefix}.get-item-use-result`] = this.handleGetItemUseResult.bind(this);
+    CONFIG.queries[`${modulePrefix}.list-chat-messages`] = this.handleListChatMessages.bind(this);
+    CONFIG.queries[`${modulePrefix}.get-chat-message`] = this.handleGetChatMessage.bind(this);
+    CONFIG.queries[`${modulePrefix}.delete-chat-messages`] =
+      this.handleDeleteChatMessages.bind(this);
+
+    // Combat control queries
+    CONFIG.queries[`${modulePrefix}.get-combat-state`] = this.handleGetCombatState.bind(this);
+    CONFIG.queries[`${modulePrefix}.start-combat`] = this.handleStartCombat.bind(this);
+    CONFIG.queries[`${modulePrefix}.add-tokens-to-combat`] =
+      this.handleAddTokensToCombat.bind(this);
+    CONFIG.queries[`${modulePrefix}.roll-combat-initiative`] =
+      this.handleRollCombatInitiative.bind(this);
+    CONFIG.queries[`${modulePrefix}.set-combatant-initiative`] =
+      this.handleSetCombatantInitiative.bind(this);
+    CONFIG.queries[`${modulePrefix}.next-combat-turn`] = this.handleNextCombatTurn.bind(this);
+    CONFIG.queries[`${modulePrefix}.previous-combat-turn`] =
+      this.handlePreviousCombatTurn.bind(this);
+    CONFIG.queries[`${modulePrefix}.next-combat-round`] = this.handleNextCombatRound.bind(this);
+    CONFIG.queries[`${modulePrefix}.set-combatant-defeated`] =
+      this.handleSetCombatantDefeated.bind(this);
+    CONFIG.queries[`${modulePrefix}.end-combat`] = this.handleEndCombat.bind(this);
   }
 
   /**
@@ -1608,6 +1632,246 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to get item use result: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleListChatMessages(data: {
+    limit?: number;
+    sinceId?: string;
+    sinceTime?: number;
+    includeContent?: boolean;
+    includeFlags?: boolean;
+    includeRolls?: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.listChatMessages(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to list chat messages: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleGetChatMessage(data: {
+    messageId: string;
+    includeContent?: boolean;
+    includeFlags?: boolean;
+    includeRolls?: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+      if (!data?.messageId) throw new Error('messageId is required');
+      return await this.dataAccess.getChatMessage(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to get chat message: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleDeleteChatMessages(data: {
+    messageIds?: string[];
+    sinceId?: string;
+    sinceTime?: number;
+    all?: boolean;
+    confirmBulkOperation?: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.deleteChatMessages(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to delete chat messages: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleGetCombatState(data: { combatId?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.getCombatState(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to get combat state: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleStartCombat(data: {
+    tokenIds?: string[];
+    combatId?: string;
+    rollInitiative?: boolean;
+    includeHidden?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.startCombat(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to start combat: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleAddTokensToCombat(data: {
+    tokenIds: string[];
+    combatId?: string;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.addTokensToCombat(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to add tokens to combat: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleRollCombatInitiative(data: {
+    combatId?: string;
+    combatantIds?: string[];
+    rollAll?: boolean;
+    formula?: string;
+    updateTurn?: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.rollCombatInitiative(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to roll combat initiative: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleSetCombatantInitiative(data: {
+    combatId?: string;
+    combatantId: string;
+    initiative: number;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.setCombatantInitiative(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to set combatant initiative: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleNextCombatTurn(data: { combatId?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.nextCombatTurn(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to advance combat turn: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handlePreviousCombatTurn(data: { combatId?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.previousCombatTurn(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to rewind combat turn: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleNextCombatRound(data: { combatId?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.nextCombatRound(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to advance combat round: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleSetCombatantDefeated(data: {
+    combatId?: string;
+    combatantId: string;
+    defeated: boolean;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.setCombatantDefeated(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to set combatant defeated: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleEndCombat(data: { combatId?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.endCombat(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to end combat: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

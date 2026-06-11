@@ -6000,11 +6000,44 @@ export class FoundryDataAccess {
     return token?.actor?.id || this.tokenDocument(token)?.actorId;
   }
 
+  private tokenRefKeys(token: any): string[] {
+    if (!token) return [];
+    const document = this.tokenDocument(token);
+    const keys = [
+      token.uuid,
+      token.document?.uuid,
+      document?.uuid,
+      token.id,
+      token.document?.id,
+      document?.id,
+      token.actor?.id,
+      document?.actorId,
+    ].filter(Boolean);
+    return Array.from(new Set(keys.map(String)));
+  }
+
+  private tokenRefKeySet(tokens: any): Set<string> {
+    const set = new Set<string>();
+    if (!tokens) return set;
+    for (const token of Array.from(tokens)) {
+      for (const key of this.tokenRefKeys(token)) set.add(key);
+    }
+    return set;
+  }
+
+  private tokenSetHas(tokens: any, token: any): boolean {
+    if (!tokens || !token) return false;
+    const keys = this.tokenRefKeys(token);
+    if (keys.length === 0) return false;
+    const tokenSet = this.tokenRefKeySet(tokens);
+    return keys.some(key => tokenSet.has(key));
+  }
+
   private namesFromTokenSet(tokens: any, exclude: any[] = []): string[] | undefined {
     if (!tokens) return undefined;
-    const excludeIds = new Set(exclude.map(token => this.tokenDocument(token)?.id || token?.id));
+    const excludeKeys = this.tokenRefKeySet(exclude);
     return Array.from(tokens)
-      .filter((token: any) => !excludeIds.has(this.tokenDocument(token)?.id || token?.id))
+      .filter((token: any) => this.tokenRefKeys(token).every(key => !excludeKeys.has(key)))
       .map((token: any) => this.tokenDisplayName(token));
   }
 
@@ -6016,8 +6049,8 @@ export class FoundryDataAccess {
       workflow.saveItem?.system?.save?.ability ?? workflow.item?.system?.save?.ability;
 
     return targets.map((token: any, index: number) => {
-      const saved = workflow.saves?.has?.(token) ?? false;
-      const failed = workflow.failedSaves?.has?.(token) ?? false;
+      const saved = this.tokenSetHas(workflow.saves, token);
+      const failed = this.tokenSetHas(workflow.failedSaves, token);
       const roll = saveResults[index];
       return {
         tokenId: this.tokenDocument(token)?.id,
@@ -6058,6 +6091,678 @@ export class FoundryDataAccess {
     return damage.filter(entry =>
       Object.values(entry).some(value => value !== undefined && value !== null)
     );
+  }
+
+  private extractAppliedWorkflowDamage(workflow: any): any[] {
+    return this.extractWorkflowDamage(workflow).filter(entry => {
+      if (entry.applied !== undefined && entry.applied !== null) return Number(entry.applied) !== 0;
+      return false;
+    });
+  }
+
+  private extractWorkflowAttackDetails(workflow: any): any[] {
+    if (!workflow) return [];
+    const attackTotal =
+      workflow.attackTotal ??
+      workflow.attackRoll?.total ??
+      workflow.d20AttackRoll?.total ??
+      workflow.attackRolls?.[0]?.total;
+    const hasHitTargets =
+      (workflow.hitTargets instanceof Set && workflow.hitTargets.size > 0) ||
+      (Array.isArray(workflow.hitTargets) && workflow.hitTargets.length > 0);
+    const hasAttack =
+      attackTotal !== undefined ||
+      workflow.isHit !== undefined ||
+      workflow.hitTargets !== undefined ||
+      workflow.attackRoll !== undefined ||
+      workflow.d20AttackRoll !== undefined;
+    if (!hasAttack) return [];
+    return [
+      {
+        total: attackTotal,
+        hit: workflow.isHit ?? hasHitTargets,
+      },
+    ];
+  }
+
+  private async awaitWithTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number
+  ): Promise<T | undefined> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<undefined>(resolve => {
+          timeoutId = setTimeout(() => resolve(undefined), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
+  private findRecentItemCard(params: {
+    since: number;
+    sourceTokenId?: string;
+    sourceActorId?: string;
+    itemId?: string;
+    itemName?: string;
+  }): any | null {
+    const messages = Array.from((game.messages as any)?.contents ?? []) as any[];
+    return (
+      messages
+        .filter(message => (message.timestamp ?? 0) >= params.since)
+        .reverse()
+        .find(message => {
+          const speaker = message.speaker ?? {};
+          const midiFlags = message.flags?.['midi-qol'] ?? {};
+          const dnd5eFlags = message.flags?.dnd5e ?? {};
+          const sameSource =
+            !params.sourceTokenId ||
+            speaker.token === params.sourceTokenId ||
+            speaker.actor === params.sourceActorId;
+          const sameItem =
+            !params.itemId ||
+            midiFlags.itemId === params.itemId ||
+            midiFlags.item?.id === params.itemId ||
+            dnd5eFlags.item?.id === params.itemId ||
+            midiFlags.itemName === params.itemName ||
+            dnd5eFlags.item?.name === params.itemName;
+          return sameSource && sameItem;
+        }) ?? null
+    );
+  }
+
+  private getMessageMidiFlags(message: any): any {
+    return message?.flags?.['midi-qol'] ?? {};
+  }
+
+  private collectMessageTokenUuids(messages: any[]): string[] {
+    const values: string[] = [];
+    for (const message of messages) {
+      const midiFlags = this.getMessageMidiFlags(message);
+      for (const key of [
+        'targetUuids',
+        'hitTargetUuids',
+        'failedSaveUuids',
+        'saveUuids',
+        'failedSaves',
+        'saves',
+      ]) {
+        const raw = midiFlags[key];
+        if (Array.isArray(raw)) values.push(...raw.filter(Boolean).map(String));
+      }
+    }
+    return Array.from(new Set(values));
+  }
+
+  private attackRollModeOptions(attackRollMode?: 'normal' | 'advantage' | 'disadvantage'): any {
+    if (!attackRollMode || attackRollMode === 'normal') {
+      return {};
+    }
+
+    return {
+      advantage: attackRollMode === 'advantage',
+      disadvantage: attackRollMode === 'disadvantage',
+    };
+  }
+
+  private htmlToText(content: string): string {
+    if (!content) return '';
+    try {
+      const element = document.createElement('div');
+      element.innerHTML = content;
+      return (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+    } catch {
+      return String(content)
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+  }
+
+  private extractChatButtons(content: string): any[] {
+    if (!content) return [];
+    try {
+      const element = document.createElement('div');
+      element.innerHTML = content;
+      return Array.from(element.querySelectorAll('button')).map((button: any) => ({
+        label: (button.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        action:
+          button.dataset?.action ??
+          button.dataset?.midiAction ??
+          button.dataset?.workflowAction ??
+          button.getAttribute('data-action') ??
+          button.getAttribute('data-midi-action') ??
+          undefined,
+        itemId: button.dataset?.itemId ?? button.getAttribute('data-item-id') ?? undefined,
+        activityId:
+          button.dataset?.activityId ?? button.getAttribute('data-activity-id') ?? undefined,
+        disabled: !!button.disabled || button.hasAttribute('disabled'),
+        classes: Array.from(button.classList ?? []),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private formatRollSummary(roll: any, includeRaw = false): any {
+    const summary: any = {
+      formula: roll?.formula,
+      total: roll?.total,
+      dice: Array.from(roll?.dice ?? [])
+        .map((die: any) => `d${die.faces}`)
+        .join('+'),
+    };
+    if (includeRaw) {
+      summary.terms = Array.from(roll?.terms ?? []).map((term: any) => ({
+        class: term?.constructor?.name,
+        formula: term?.formula,
+        total: term?.total,
+        faces: term?.faces,
+        number: term?.number,
+        results: Array.isArray(term?.results)
+          ? term.results.map((result: any) => ({
+              result: result?.result,
+              active: result?.active,
+              discarded: result?.discarded,
+              rerolled: result?.rerolled,
+              exploded: result?.exploded,
+            }))
+          : undefined,
+        options: term?.options,
+      }));
+      summary.options = roll?.options;
+    }
+    return summary;
+  }
+
+  private summarizeChatFlags(message: any): any {
+    const midiFlags = this.getMessageMidiFlags(message);
+    const dnd5eFlags = message?.flags?.dnd5e ?? {};
+    const result: any = {
+      dnd5eRollType: dnd5eFlags.roll?.type,
+      dnd5eItemId: dnd5eFlags.roll?.itemId ?? dnd5eFlags.item?.id,
+      dnd5eOriginatingMessage: dnd5eFlags.originatingMessage,
+      midiWorkflowId: midiFlags.workflowId ?? midiFlags.itemCardUuid,
+      itemUuid: midiFlags.itemUuid ?? dnd5eFlags.item?.uuid,
+      itemId: midiFlags.itemId ?? dnd5eFlags.item?.id,
+      itemName: midiFlags.itemName ?? dnd5eFlags.item?.name,
+      attackTotal: midiFlags.attackTotal,
+      isHit: midiFlags.isHit,
+      targetUuids: [
+        ...(midiFlags.targetUuids ?? []),
+        ...(midiFlags.hitTargetUuids ?? []),
+        ...(midiFlags.failedSaveUuids ?? []),
+        ...(midiFlags.saveUuids ?? []),
+      ],
+      saveUuids: midiFlags.saveUuids,
+      failedSaveUuids: midiFlags.failedSaveUuids,
+      hasDamageDetail: Array.isArray(midiFlags.damageDetail) && midiFlags.damageDetail.length > 0,
+      hasDamageList: Array.isArray(midiFlags.damageList) && midiFlags.damageList.length > 0,
+    };
+    if (Array.isArray(result.targetUuids)) {
+      result.targetUuids = Array.from(new Set(result.targetUuids.filter(Boolean).map(String)));
+    }
+    return result;
+  }
+
+  private formatChatMessageForQA(
+    message: any,
+    options: { includeContent?: boolean; includeFlags?: boolean; includeRolls?: boolean } = {}
+  ): any {
+    const includeContent = options.includeContent ?? false;
+    const includeFlags = options.includeFlags ?? false;
+    const includeRolls = options.includeRolls ?? true;
+    const content = message.content ?? '';
+    const buttons = this.extractChatButtons(content);
+    const formatted: any = {
+      id: message.id,
+      uuid: message.uuid,
+      timestamp: message.timestamp,
+      speaker: message.speaker ?? {},
+      user: message.user?.id ?? message.user,
+      contentText: this.htmlToText(content),
+      hasRolls: (message.rolls?.length ?? 0) > 0,
+      hasButtons: buttons.length > 0,
+      buttons,
+      flagsSummary: this.summarizeChatFlags(message),
+    };
+    if (includeContent) formatted.content = content;
+    if (includeFlags) formatted.flags = message.flags ?? {};
+    if (includeRolls) {
+      formatted.rolls = Array.from(message.rolls ?? []).map((roll: any) =>
+        this.formatRollSummary(roll, includeFlags)
+      );
+    }
+    return formatted;
+  }
+
+  private selectChatMessagesAfter(params: { sinceId?: string; sinceTime?: number }): any[] {
+    const messages = Array.from((game.messages as any)?.contents ?? []) as any[];
+    let selected = messages;
+    if (params.sinceId) {
+      const index = messages.findIndex(message => message.id === params.sinceId);
+      selected = index >= 0 ? messages.slice(index + 1) : [];
+    }
+    if (params.sinceTime !== undefined) {
+      selected = selected.filter(message => (message.timestamp ?? 0) >= params.sinceTime!);
+    }
+    return selected;
+  }
+
+  async listChatMessages(params: {
+    limit?: number;
+    sinceId?: string;
+    sinceTime?: number;
+    includeContent?: boolean;
+    includeFlags?: boolean;
+    includeRolls?: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const limit = Math.max(1, Math.min(100, params.limit ?? 20));
+    const selected =
+      params.sinceId || params.sinceTime !== undefined
+        ? this.selectChatMessagesAfter({
+            ...(params.sinceId ? { sinceId: params.sinceId } : {}),
+            ...(params.sinceTime !== undefined ? { sinceTime: params.sinceTime } : {}),
+          })
+        : (Array.from((game.messages as any)?.contents ?? []) as any[]);
+    const messages = selected.slice(-limit);
+    const latest = selected[selected.length - 1];
+
+    return {
+      success: true,
+      count: messages.length,
+      totalAvailable: selected.length,
+      latestId: latest?.id,
+      latestTimestamp: latest?.timestamp,
+      messages: messages.map(message =>
+        this.formatChatMessageForQA(message, {
+          includeContent: params.includeContent ?? false,
+          includeFlags: params.includeFlags ?? false,
+          includeRolls: params.includeRolls ?? true,
+        })
+      ),
+    };
+  }
+
+  async getChatMessage(params: {
+    messageId: string;
+    includeContent?: boolean;
+    includeFlags?: boolean;
+    includeRolls?: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const message =
+      (game.messages as any)?.get?.(params.messageId) ??
+      (Array.from((game.messages as any)?.contents ?? []) as any[]).find(
+        candidate => candidate.id === params.messageId
+      );
+    if (!message) {
+      throw new Error(`ChatMessage not found: ${params.messageId}`);
+    }
+
+    return {
+      success: true,
+      ...this.formatChatMessageForQA(message, {
+        includeContent: params.includeContent ?? true,
+        includeFlags: params.includeFlags ?? true,
+        includeRolls: params.includeRolls ?? true,
+      }),
+    };
+  }
+
+  async deleteChatMessages(params: {
+    messageIds?: string[];
+    sinceId?: string;
+    sinceTime?: number;
+    all?: boolean;
+    confirmBulkOperation?: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const explicitIds = Array.isArray(params.messageIds) ? params.messageIds.filter(Boolean) : [];
+    const isBulk = !!params.all || !!params.sinceId || params.sinceTime !== undefined;
+    if (isBulk && !params.confirmBulkOperation) {
+      throw new Error(
+        'Bulk chat deletion requires confirmBulkOperation=true for all, sinceId, or sinceTime'
+      );
+    }
+
+    let messageIds: string[] = [];
+    if (params.all) {
+      messageIds = (Array.from((game.messages as any)?.contents ?? []) as any[])
+        .map(message => message.id)
+        .filter(Boolean);
+    } else if (params.sinceId || params.sinceTime !== undefined) {
+      messageIds = this.selectChatMessagesAfter({
+        ...(params.sinceId ? { sinceId: params.sinceId } : {}),
+        ...(params.sinceTime !== undefined ? { sinceTime: params.sinceTime } : {}),
+      })
+        .map(message => message.id)
+        .filter(Boolean);
+    } else if (explicitIds.length > 0) {
+      messageIds = explicitIds;
+    } else {
+      throw new Error('Provide messageIds, sinceId, sinceTime, or all=true');
+    }
+
+    messageIds = Array.from(new Set(messageIds));
+    const deletedIds: string[] = [];
+    const errors: string[] = [];
+
+    for (const messageId of messageIds) {
+      const message =
+        (game.messages as any)?.get?.(messageId) ??
+        (Array.from((game.messages as any)?.contents ?? []) as any[]).find(
+          candidate => candidate.id === messageId
+        );
+      if (!message) {
+        errors.push(`ChatMessage not found: ${messageId}`);
+        continue;
+      }
+      try {
+        await message.delete();
+        deletedIds.push(messageId);
+      } catch (error) {
+        errors.push(
+          `Failed to delete ${messageId}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      deletedCount: deletedIds.length,
+      requestedCount: messageIds.length,
+      deletedIds,
+      errors,
+    };
+  }
+
+  async getCombatState(params: { combatId?: string } = {}): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, false);
+    return {
+      success: true,
+      combat: combat ? this.formatCombatState(combat) : null,
+    };
+  }
+
+  async startCombat(params: {
+    tokenIds?: string[];
+    combatId?: string;
+    rollInitiative?: boolean;
+    includeHidden?: boolean;
+    reuseExisting?: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+    const scene = this.getCurrentSceneDocument();
+    const tokenIds = params.tokenIds?.length
+      ? params.tokenIds
+      : this.getSceneCombatTokenIds(scene, !!params.includeHidden);
+    if (tokenIds.length === 0) {
+      throw new Error('No current-scene tokens are available to start combat');
+    }
+
+    let combat = params.combatId
+      ? this.resolveCombat(params.combatId, true)
+      : params.reuseExisting === false
+        ? null
+        : this.resolveSceneCombat(scene.id);
+
+    if (!combat) {
+      const CombatClass = (CONFIG as any).Combat?.documentClass ?? (globalThis as any).Combat;
+      combat = await CombatClass.create({
+        scene: scene.id,
+        active: true,
+        combatants: this.createCombatantDataForTokenIds(scene, tokenIds),
+      });
+    } else {
+      await this.ensureCombatActive(combat);
+      await this.addMissingTokensToCombat(combat, scene, tokenIds);
+    }
+
+    if (params.rollInitiative ?? true) {
+      await combat.rollAll({ updateTurn: true });
+    }
+    if (!combat.started) {
+      await combat.startCombat();
+    }
+
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async addTokensToCombat(params: { tokenIds: string[]; combatId?: string }): Promise<any> {
+    this.validateFoundryState();
+    const scene = this.getCurrentSceneDocument();
+    const combat = this.resolveCombat(params.combatId, true);
+    await this.addMissingTokensToCombat(combat, scene, params.tokenIds);
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async rollCombatInitiative(params: {
+    combatId?: string;
+    combatantIds?: string[];
+    rollAll?: boolean;
+    formula?: string;
+    updateTurn?: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    const options: any = { updateTurn: params.updateTurn ?? true };
+    if (params.formula) options.formula = params.formula;
+
+    if (params.rollAll ?? true) {
+      await combat.rollAll(options);
+    } else {
+      const ids = params.combatantIds?.filter(Boolean) ?? [];
+      if (ids.length === 0) {
+        throw new Error('combatantIds are required when rollAll=false');
+      }
+      await combat.rollInitiative(ids, options);
+    }
+
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async setCombatantInitiative(params: {
+    combatId?: string;
+    combatantId: string;
+    initiative: number;
+  }): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    await combat.setInitiative(params.combatantId, params.initiative);
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async nextCombatTurn(params: { combatId?: string } = {}): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    await combat.nextTurn();
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async previousCombatTurn(params: { combatId?: string } = {}): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    await combat.previousTurn();
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async nextCombatRound(params: { combatId?: string } = {}): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    await combat.nextRound();
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async setCombatantDefeated(params: {
+    combatId?: string;
+    combatantId: string;
+    defeated: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    const combatant = combat.combatants.get(params.combatantId);
+    if (!combatant) {
+      throw new Error(`Combatant not found: ${params.combatantId}`);
+    }
+    await combatant.update({ defeated: params.defeated });
+    return {
+      success: true,
+      combat: this.formatCombatState(combat),
+    };
+  }
+
+  async endCombat(params: { combatId?: string } = {}): Promise<any> {
+    this.validateFoundryState();
+    const combat = this.resolveCombat(params.combatId, true);
+    const combatId = combat.id;
+    await combat.delete();
+    return {
+      success: true,
+      endedCombatId: combatId,
+      combat: null,
+    };
+  }
+
+  private getCurrentSceneDocument(): any {
+    const scene = canvas?.scene ?? (game.scenes as any)?.active;
+    if (!scene) {
+      throw new Error('No active canvas scene is available');
+    }
+    return scene;
+  }
+
+  private resolveCombat(combatId?: string, required = true): any | null {
+    const combat =
+      (combatId ? (game.combats as any)?.get?.(combatId) : null) ??
+      (game as any).combat ??
+      (game.combats as any)?.active ??
+      null;
+    if (!combat && required) {
+      throw new Error(combatId ? `Combat not found: ${combatId}` : 'No active combat encounter');
+    }
+    return combat;
+  }
+
+  private resolveSceneCombat(sceneId: string): any | null {
+    const active = this.resolveCombat(undefined, false);
+    if (active?.scene?.id === sceneId || active?.scene === sceneId) return active;
+    return (
+      (Array.from((game.combats as any)?.contents ?? []) as any[]).find(
+        combat => combat.scene?.id === sceneId || combat.scene === sceneId
+      ) ?? null
+    );
+  }
+
+  private async ensureCombatActive(combat: any): Promise<void> {
+    if (!combat.active && typeof combat.activate === 'function') {
+      await combat.activate();
+    } else if (!combat.active && typeof combat.update === 'function') {
+      await combat.update({ active: true });
+    }
+  }
+
+  private getSceneCombatTokenIds(scene: any, includeHidden: boolean): string[] {
+    return (Array.from(scene.tokens ?? []) as any[])
+      .filter(token => token.actorId || token.actor)
+      .filter(token => includeHidden || !token.hidden)
+      .map(token => token.id)
+      .filter(Boolean);
+  }
+
+  private createCombatantDataForTokenIds(scene: any, tokenIds: string[]): any[] {
+    return tokenIds.map(tokenId => {
+      const token = scene.tokens?.get?.(tokenId);
+      if (!token) throw new Error(`Token not found on current scene: ${tokenId}`);
+      return this.createCombatantData(scene, token);
+    });
+  }
+
+  private createCombatantData(scene: any, token: any): any {
+    return {
+      tokenId: token.id,
+      sceneId: scene.id,
+      actorId: token.actorId ?? token.actor?.id,
+      name: token.name,
+      img: token.texture?.src ?? token.img,
+      hidden: !!token.hidden,
+      initiative: null,
+    };
+  }
+
+  private async addMissingTokensToCombat(
+    combat: any,
+    scene: any,
+    tokenIds: string[]
+  ): Promise<void> {
+    const existing = new Set((Array.from(combat.combatants ?? []) as any[]).map(c => c.tokenId));
+    const additions = this.createCombatantDataForTokenIds(scene, tokenIds).filter(
+      data => !existing.has(data.tokenId)
+    );
+    if (additions.length > 0) {
+      await combat.createEmbeddedDocuments('Combatant', additions);
+    }
+  }
+
+  private formatCombatState(combat: any): any {
+    const current = combat.combatant ?? null;
+    const next = combat.nextCombatant ?? null;
+    return {
+      id: combat.id,
+      sceneId: combat.scene?.id ?? combat.scene,
+      active: !!combat.active,
+      started: !!combat.started,
+      round: combat.round,
+      turn: combat.turn,
+      current: current ? this.formatCombatantState(current) : null,
+      next: next ? this.formatCombatantState(next) : null,
+      combatants: (Array.from(combat.combatants ?? []) as any[]).map(combatant =>
+        this.formatCombatantState(combatant)
+      ),
+    };
+  }
+
+  private formatCombatantState(combatant: any): any {
+    return {
+      id: combatant.id,
+      tokenId: combatant.tokenId,
+      sceneId: combatant.sceneId,
+      actorId: combatant.actorId,
+      name: combatant.name,
+      initiative: combatant.initiative,
+      hidden: !!combatant.hidden,
+      defeated: !!combatant.defeated,
+      isNPC: !!combatant.isNPC,
+    };
   }
 
   private extractTokenCombatState(token: any): any {
@@ -7215,6 +7920,7 @@ export class FoundryDataAccess {
           configureDialog?: boolean | undefined; // Whether to show configuration dialog
           skipDialog?: boolean | undefined; // Skip confirmation dialogs (default: true for MCP)
           spellLevel?: number | undefined; // For spells: cast at higher level
+          attackRollMode?: 'normal' | 'advantage' | 'disadvantage' | undefined;
           versatile?: boolean | undefined; // For versatile weapons: use versatile damage
           declaredRiders?: Array<Record<string, any>> | undefined; // Workflow-local rider intent such as Divine Smite
         }
@@ -7284,6 +7990,16 @@ export class FoundryDataAccess {
         if (options.spellLevel !== undefined) {
           useOptions.slotLevel = options.spellLevel; // D&D 5e
           useOptions.level = options.spellLevel; // generic
+        }
+
+        const attackRollOptions = this.attackRollModeOptions(options.attackRollMode);
+        if (Object.keys(attackRollOptions).length > 0) {
+          useOptions.advantage = attackRollOptions.advantage;
+          useOptions.disadvantage = attackRollOptions.disadvantage;
+          useOptions.workflowOptions = {
+            ...(useOptions.workflowOptions ?? {}),
+            ...attackRollOptions,
+          };
         }
 
         if (options.declaredRiders && options.declaredRiders.length > 0) {
@@ -7422,7 +8138,9 @@ export class FoundryDataAccess {
     options?:
       | {
           spellLevel?: number | undefined;
+          attackRollMode?: 'normal' | 'advantage' | 'disadvantage' | undefined;
           versatile?: boolean | undefined;
+          workflowTimeoutMs?: number | undefined;
           declaredRiders?: Array<Record<string, any>> | undefined;
         }
       | undefined;
@@ -7475,25 +8193,33 @@ export class FoundryDataAccess {
           .map((token: any) => token.document?.uuid)
           .filter(Boolean);
         const declaredRiders = options.declaredRiders ?? [];
+        const attackRollOptions = this.attackRollModeOptions(options.attackRollMode);
         const usageConfig: Record<string, any> = {
           chooseActivity: false,
           configure: false,
           createMessage: true,
           arcaneDeclaredRiders: declaredRiders,
           midiOptions: {
+            ...(activity?.id ? { activityId: activity.id } : {}),
+            ...(activity?.identifier ? { activityIdentifier: activity.identifier } : {}),
             targetUuids,
             targetsToUse: new Set(resolvedTargets.tokens),
             ignoreUserTargets: false,
             fastForward: true,
+            ...attackRollOptions,
             arcaneDeclaredRiders: declaredRiders,
-            workflowOptions: { targetUuids, arcaneDeclaredRiders: declaredRiders },
+            workflowOptions: {
+              targetUuids,
+              ...attackRollOptions,
+              arcaneDeclaredRiders: declaredRiders,
+            },
           },
         };
 
-        if (activity?.id) usageConfig.activity = activity.id;
         if (options.spellLevel !== undefined) {
           usageConfig.slotLevel = options.spellLevel;
           usageConfig.level = options.spellLevel;
+          usageConfig.midiOptions.spellLevel = options.spellLevel;
         }
 
         const workflow = await midi.completeItemUse(itemAny, usageConfig, { configure: false }, {});
@@ -7502,7 +8228,8 @@ export class FoundryDataAccess {
         const failedSaves = this.namesFromTokenSet(workflow?.failedSaves, savedTokens);
         const saves = this.namesFromTokenSet(workflow?.saves);
         const targetDetails = this.extractWorkflowSaveDetails(workflow, resolvedTargets.tokens);
-        const damage = this.extractWorkflowDamage(workflow);
+        const damageRolled = this.extractWorkflowDamage(workflow);
+        const damageApplied = this.extractAppliedWorkflowDamage(workflow);
 
         this.auditLog(
           'useItemOnTargets',
@@ -7529,6 +8256,9 @@ export class FoundryDataAccess {
           saves?: string[];
           targetDetails?: any[];
           damage?: any[];
+          damageRolled?: any[];
+          damageApplied?: any[];
+          attacks?: any[];
           automation?: 'full' | 'partial';
         } = {
           success: true,
@@ -7545,7 +8275,11 @@ export class FoundryDataAccess {
         if (failedSaves) result.failedSaves = failedSaves;
         if (saves) result.saves = saves;
         if (targetDetails.length > 0) result.targetDetails = targetDetails;
-        if (damage.length > 0) result.damage = damage;
+        const attacks = this.extractWorkflowAttackDetails(workflow);
+        if (attacks.length > 0) result.attacks = attacks;
+        if (damageRolled.length > 0) result.damageRolled = damageRolled;
+        if (damageApplied.length > 0) result.damageApplied = damageApplied;
+        result.damage = damageApplied;
 
         return result;
       } catch (error) {
@@ -7596,7 +8330,9 @@ export class FoundryDataAccess {
     options?:
       | {
           spellLevel?: number | undefined;
+          attackRollMode?: 'normal' | 'advantage' | 'disadvantage' | undefined;
           versatile?: boolean | undefined;
+          workflowTimeoutMs?: number | undefined;
           declaredRiders?: Array<Record<string, any>> | undefined;
         }
       | undefined;
@@ -7642,37 +8378,92 @@ export class FoundryDataAccess {
       .map((token: any) => this.tokenDocument(token)?.uuid)
       .filter(Boolean);
     const declaredRiders = options.declaredRiders ?? [];
+    const attackRollOptions = this.attackRollModeOptions(options.attackRollMode);
+    const workflowTimeoutMs = Math.max(
+      5_000,
+      Math.min(300_000, options.workflowTimeoutMs ?? 60_000)
+    );
 
     this.setUserTargets(targetTokens);
 
     if (midi && typeof midi.completeItemUse === 'function') {
       try {
+        const startedAt = Date.now();
         const usageConfig: Record<string, any> = {
           chooseActivity: false,
           configure: false,
           createMessage: true,
           arcaneDeclaredRiders: declaredRiders,
           midiOptions: {
+            ...(activity?.id ? { activityId: activity.id } : {}),
+            ...(activity?.identifier ? { activityIdentifier: activity.identifier } : {}),
             targetUuids,
             targetsToUse: new Set(targetTokens),
             ignoreUserTargets: false,
             fastForward: true,
+            ...attackRollOptions,
             arcaneDeclaredRiders: declaredRiders,
             workflowOptions: {
               targetUuids,
               sourceTokenUuid: this.tokenDocument(sourceToken)?.uuid,
+              ...attackRollOptions,
               arcaneDeclaredRiders: declaredRiders,
             },
           },
         };
 
-        if (activity?.id) usageConfig.activity = activity.id;
         if (options.spellLevel !== undefined) {
           usageConfig.slotLevel = options.spellLevel;
           usageConfig.level = options.spellLevel;
+          usageConfig.midiOptions.spellLevel = options.spellLevel;
         }
 
-        const workflow = await midi.completeItemUse(itemAny, usageConfig, { configure: false }, {});
+        const workflow: any = await this.awaitWithTimeout<any>(
+          midi.completeItemUse(itemAny, usageConfig, { configure: false }, {}),
+          workflowTimeoutMs
+        );
+        if (!workflow) {
+          const sourceActorId = this.tokenActorId(sourceToken);
+          const recentItemCard = this.findRecentItemCard({
+            since: startedAt,
+            sourceTokenId: this.tokenDocument(sourceToken)?.id,
+            itemId: item.id,
+            itemName: item.name,
+            ...(sourceActorId ? { sourceActorId } : {}),
+          });
+          const submitted = !!recentItemCard;
+
+          this.auditLog(
+            'useItemOnTokenTargets',
+            {
+              sourceTokenId,
+              itemIdentifier,
+              targetTokenIds,
+              itemCardId: recentItemCard?.id,
+            },
+            submitted ? 'success' : 'failure',
+            submitted ? undefined : 'Midi-QOL returned no workflow'
+          );
+
+          return {
+            success: submitted,
+            status: submitted ? 'submitted' : 'no-workflow',
+            automation: submitted ? 'partial' : 'full',
+            message: submitted
+              ? `Item use submitted for ${this.tokenDisplayName(sourceToken)} using ${item.name}; query get-item-use-result with itemCardId for completion.`
+              : `Midi-QOL returned no workflow for ${this.tokenDisplayName(sourceToken)} using ${item.name}.`,
+            sourceTokenId: this.tokenDocument(sourceToken)?.id,
+            sourceTokenName: this.tokenDisplayName(sourceToken),
+            sourceActorId: this.tokenActorId(sourceToken),
+            sourceActorName: sourceActor.name,
+            itemId: item.id,
+            itemName: item.name,
+            itemCardId: recentItemCard?.id,
+            targetTokenIds: targetTokens.map(token => this.tokenDocument(token)?.id),
+            targetTokenNames: targetTokens.map(token => this.tokenDisplayName(token)),
+          };
+        }
+
         const savedTokens = Array.from(workflow?.saves ?? []);
         const failedSaves = this.namesFromTokenSet(workflow?.failedSaves, savedTokens);
         const saves = this.namesFromTokenSet(workflow?.saves);
@@ -7706,8 +8497,11 @@ export class FoundryDataAccess {
           workflowId: workflow?.id,
           itemCardId: workflow?.itemCardId,
           targets: targetDetails,
-          damage: this.extractWorkflowDamage(workflow),
+          attacks: this.extractWorkflowAttackDetails(workflow),
+          damageRolled: this.extractWorkflowDamage(workflow),
+          damageApplied: this.extractAppliedWorkflowDamage(workflow),
         };
+        result.damage = result.damageApplied;
 
         if (failedSaves) result.failedSaves = failedSaves;
         if (saves) result.saves = saves;
@@ -7760,7 +8554,7 @@ export class FoundryDataAccess {
     this.validateFoundryState();
 
     const { itemCardId, scanForward = 8 } = params;
-    const messages = Array.from((game.messages as any)?.contents ?? []);
+    const messages = Array.from((game.messages as any)?.contents ?? []) as any[];
     const itemMessageIndex = messages.findIndex((message: any) => message.id === itemCardId);
     if (itemMessageIndex < 0) {
       return {
@@ -7785,12 +8579,7 @@ export class FoundryDataAccess {
       : null;
     const sourceActor =
       sourceToken?.actor ?? (speaker.actor ? game.actors?.get(speaker.actor) : null);
-    const targetUuids = [
-      ...(midiFlags.targetUuids ?? []),
-      ...(midiFlags.hitTargetUuids ?? []),
-      ...(midiFlags.failedSaveUuids ?? []),
-      ...(midiFlags.saveUuids ?? []),
-    ];
+    const targetUuids = this.collectMessageTokenUuids(relatedMessages);
     const uniqueTargetUuids = Array.from(new Set(targetUuids.filter(Boolean)));
     const targets = uniqueTargetUuids.map((uuid: string) => {
       const tokenId = uuid.split('.').pop();
@@ -7802,11 +8591,55 @@ export class FoundryDataAccess {
         uuid,
       };
     });
-    const failedSaveUuidSet = new Set((midiFlags.failedSaveUuids ?? []).filter(Boolean));
-    const saveUuidSet = new Set((midiFlags.saveUuids ?? []).filter(Boolean));
+    const failedSaveUuidSet = new Set<string>();
+    const saveUuidSet = new Set<string>();
+    const damageRolled: any[] = [];
+    const damageApplied: any[] = [];
+    const attacks: any[] = [];
+
+    for (const message of relatedMessages) {
+      const messageMidiFlags = this.getMessageMidiFlags(message);
+      for (const uuid of messageMidiFlags.failedSaveUuids ?? [])
+        failedSaveUuidSet.add(String(uuid));
+      for (const uuid of messageMidiFlags.saveUuids ?? []) saveUuidSet.add(String(uuid));
+      const messageDamage = messageMidiFlags.damageDetail ?? messageMidiFlags.damageList ?? [];
+      if (Array.isArray(messageDamage)) {
+        const entries = messageDamage.map((entry: any) => ({
+            ...entry,
+            messageId: message.id,
+          }));
+        damageRolled.push(...entries);
+        const messageTargets = this.collectMessageTokenUuids([message]).filter(Boolean);
+        const isExplicitMiss = messageMidiFlags.isHit === false;
+        if (!isExplicitMiss && messageTargets.length > 0) {
+          damageApplied.push(...entries);
+        }
+      }
+      if (messageMidiFlags.attackTotal !== undefined || messageMidiFlags.isHit !== undefined) {
+        attacks.push({
+          messageId: message.id,
+          total: messageMidiFlags.attackTotal,
+          hit: messageMidiFlags.isHit,
+        });
+      }
+    }
+    for (const uuid of saveUuidSet) failedSaveUuidSet.delete(uuid);
+    const stateDiff: Record<string, any> = {};
+    for (const target of targets) {
+      if (!target.tokenId) continue;
+      const token = this.findCurrentSceneTokenByIdentifier(target.tokenId);
+      if (!token) continue;
+      stateDiff[target.tokenId] = this.extractTokenCombatState(token);
+    }
 
     return {
-      status: relatedMessages.length > 1 || itemMessage ? 'completed' : 'pending',
+      status:
+        relatedMessages.length > 1 ||
+        damageRolled.length > 0 ||
+        saveUuidSet.size > 0 ||
+        failedSaveUuidSet.size > 0
+          ? 'completed'
+          : 'pending',
       success: true,
       itemCardId,
       workflowId: midiFlags.workflowId ?? itemMessage.uuid,
@@ -7833,11 +8666,15 @@ export class FoundryDataAccess {
           name: target.name,
           success: false,
         })),
-      attack: {
+      attack: attacks[0] ?? {
         total: midiFlags.attackTotal,
         hit: midiFlags.isHit,
       },
-      damage: midiFlags.damageDetail ?? midiFlags.damageList ?? [],
+      attacks,
+      damage: damageApplied,
+      damageRolled,
+      damageApplied,
+      stateDiff,
       item: {
         id: midiFlags.itemId ?? dnd5eFlags.item?.id,
         uuid: midiFlags.itemUuid ?? dnd5eFlags.item?.uuid,

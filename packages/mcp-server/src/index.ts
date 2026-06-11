@@ -22,7 +22,7 @@ import * as path from 'path';
 
 const CONTROL_HOST = '127.0.0.1';
 
-const CONTROL_PORT = 31414;
+const CONTROL_PORT = parseInt(process.env.FOUNDRY_MCP_CONTROL_PORT || '31414', 10);
 
 type BackendReq = { id: string; method: string; params?: any };
 

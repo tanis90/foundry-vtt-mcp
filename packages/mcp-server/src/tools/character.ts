@@ -146,6 +146,12 @@ export class CharacterTools {
               type: 'number',
               description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
             },
+            attackRollMode: {
+              type: 'string',
+              enum: ['normal', 'advantage', 'disadvantage'],
+              description:
+                'For attack rolls: force normal, advantage, or disadvantage. Defaults to normal/system rules.',
+            },
             riderIds: {
               type: 'array',
               items: { type: 'string', minLength: 1 },
@@ -160,6 +166,11 @@ export class CharacterTools {
                 type: 'object',
                 additionalProperties: true,
               },
+            },
+            timeoutMs: {
+              type: 'number',
+              description:
+                'Foundry automation query timeout in milliseconds. Defaults to 60000 for item automation.',
             },
           },
           required: ['actorIdentifier', 'itemIdentifier'],
@@ -196,6 +207,12 @@ export class CharacterTools {
               type: 'number',
               description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
             },
+            attackRollMode: {
+              type: 'string',
+              enum: ['normal', 'advantage', 'disadvantage'],
+              description:
+                'For attack rolls: force normal, advantage, or disadvantage. Defaults to normal/system rules.',
+            },
             riderIds: {
               type: 'array',
               minItems: 1,
@@ -212,6 +229,11 @@ export class CharacterTools {
                 additionalProperties: true,
               },
             },
+            timeoutMs: {
+              type: 'number',
+              description:
+                'Foundry automation query timeout in milliseconds. Defaults to 60000 for item automation.',
+            },
           },
           required: ['actorIdentifier', 'itemIdentifier', 'targets'],
         },
@@ -219,7 +241,7 @@ export class CharacterTools {
       {
         name: 'use-item-on-token-targets',
         description:
-          'Token-first combat item use. Resolves the source and all targets only from current-scene tokens, then uses the source token synthetic actor for D&D 5e midi-qol automation. Use this for unlinked NPC combat tokens and duplicate tokens from the same actor.',
+          'Token-first combat item use. Resolves the source and all targets only from current-scene tokens, then uses the source token synthetic actor for D&D 5e midi-qol automation. Use this for unlinked NPC combat tokens and duplicate tokens from the same actor. Returned damage is conservative: damageRolled is candidate rolled damage, damageApplied is confirmed applied damage, and damage is kept as an applied-damage alias.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -246,6 +268,12 @@ export class CharacterTools {
               type: 'number',
               description: 'For spells: cast at a higher level than base (D&D 5e upcasting)',
             },
+            attackRollMode: {
+              type: 'string',
+              enum: ['normal', 'advantage', 'disadvantage'],
+              description:
+                'For attack rolls: force normal, advantage, or disadvantage. Defaults to normal/system rules.',
+            },
             riderIds: {
               type: 'array',
               minItems: 1,
@@ -262,6 +290,11 @@ export class CharacterTools {
                 additionalProperties: true,
               },
             },
+            timeoutMs: {
+              type: 'number',
+              description:
+                'Foundry automation query timeout in milliseconds. Defaults to 60000 for item automation.',
+            },
           },
           required: ['sourceTokenId', 'itemIdentifier', 'targetTokenIds'],
         },
@@ -269,7 +302,7 @@ export class CharacterTools {
       {
         name: 'get-item-use-result',
         description:
-          'Get a conservative QA summary for an item use by Foundry chat item card ID. Scans nearby follow-up chat messages and midi-qol/dnd5e flags for source, targets, saves, damage, and debug message IDs.',
+          'Get a conservative QA summary for an item use by Foundry chat item card ID. Scans nearby follow-up chat messages and midi-qol/dnd5e flags for source, targets, saves, rolled damage, applied damage, and debug message IDs.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -283,6 +316,99 @@ export class CharacterTools {
             },
           },
           required: ['itemCardId'],
+        },
+      },
+      {
+        name: 'list-chat-messages',
+        description:
+          'List recent Foundry chat messages for combat QA. Supports listing messages after a known message ID or timestamp, with optional content, flags, rolls, and button summaries.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            limit: {
+              type: 'number',
+              description: 'Maximum messages to return. Defaults to 20, max 100.',
+            },
+            sinceId: {
+              type: 'string',
+              description:
+                'Return messages created after this ChatMessage ID in game.messages order.',
+            },
+            sinceTime: {
+              type: 'number',
+              description: 'Return messages with timestamp >= this value.',
+            },
+            includeContent: {
+              type: 'boolean',
+              description: 'Include full HTML content. Defaults to false.',
+            },
+            includeFlags: {
+              type: 'boolean',
+              description: 'Include raw ChatMessage flags. Defaults to false.',
+            },
+            includeRolls: {
+              type: 'boolean',
+              description: 'Include roll formulas/totals. Defaults to true.',
+            },
+          },
+        },
+      },
+      {
+        name: 'get-chat-message',
+        description:
+          'Read one Foundry ChatMessage by ID with optional full content, flags, rolls, and best-effort button/user-interaction summary.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            messageId: {
+              type: 'string',
+              description: 'Foundry ChatMessage ID to read',
+            },
+            includeContent: {
+              type: 'boolean',
+              description: 'Include full HTML content. Defaults to true.',
+            },
+            includeFlags: {
+              type: 'boolean',
+              description: 'Include raw ChatMessage flags. Defaults to true.',
+            },
+            includeRolls: {
+              type: 'boolean',
+              description: 'Include roll formulas/totals. Defaults to true.',
+            },
+          },
+          required: ['messageId'],
+        },
+      },
+      {
+        name: 'delete-chat-messages',
+        description:
+          'Delete specific Foundry chat messages, messages after a known marker, or all chat messages. Bulk deletion requires confirmBulkOperation=true.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            messageIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Specific ChatMessage IDs to delete.',
+            },
+            sinceId: {
+              type: 'string',
+              description: 'Delete messages created after this ChatMessage ID.',
+            },
+            sinceTime: {
+              type: 'number',
+              description: 'Delete messages with timestamp >= this value.',
+            },
+            all: {
+              type: 'boolean',
+              description: 'Delete all chat messages.',
+            },
+            confirmBulkOperation: {
+              type: 'boolean',
+              description: 'Required for bulk deletion via sinceId, sinceTime, or all.',
+            },
+          },
         },
       },
       {
@@ -661,9 +787,11 @@ export class CharacterTools {
       targets: z.array(z.string()).optional(),
       consume: z.boolean().optional(),
       spellLevel: z.number().optional(),
+      attackRollMode: z.enum(['normal', 'advantage', 'disadvantage']).optional(),
       skipDialog: z.boolean().optional(),
       riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
       riderOptions: z.record(z.record(z.unknown())).default({}),
+      timeoutMs: z.number().int().min(5000).max(300000).optional().default(60000),
     });
 
     const {
@@ -672,9 +800,11 @@ export class CharacterTools {
       targets,
       consume,
       spellLevel,
+      attackRollMode,
       skipDialog,
       riderIds,
       riderOptions,
+      timeoutMs,
     } = schema.parse(args);
     const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
 
@@ -684,24 +814,31 @@ export class CharacterTools {
       targets,
       consume,
       spellLevel,
+      attackRollMode,
       skipDialog,
       riderIds,
       riderOptions,
+      timeoutMs,
     });
 
     try {
-      const result = await this.foundryClient.query('foundry-mcp-bridge.useItem', {
-        actorIdentifier,
-        itemIdentifier,
-        targets,
-        options: {
-          consume: consume ?? true,
-          spellLevel,
-          skipDialog: skipDialog ?? true, // Default to skipping dialogs for MCP automation
-          declaredRiders: normalizedDeclaredRiders,
-          arcaneDeclaredRiders: normalizedDeclaredRiders,
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.useItem',
+        {
+          actorIdentifier,
+          itemIdentifier,
+          targets,
+          options: {
+            consume: consume ?? true,
+            spellLevel,
+            attackRollMode,
+            skipDialog: skipDialog ?? true, // Default to skipping dialogs for MCP automation
+            declaredRiders: normalizedDeclaredRiders,
+            arcaneDeclaredRiders: normalizedDeclaredRiders,
+          },
         },
-      });
+        { timeoutMs }
+      );
 
       this.logger.debug('Successfully used item', {
         actorName: result.actorName,
@@ -725,8 +862,10 @@ export class CharacterTools {
       targets: z.array(z.string()).min(1, 'At least one target is required'),
       activityIdentifier: z.string().optional(),
       spellLevel: z.number().optional(),
+      attackRollMode: z.enum(['normal', 'advantage', 'disadvantage']).optional(),
       riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
       riderOptions: z.record(z.record(z.unknown())).default({}),
+      timeoutMs: z.number().int().min(5000).max(300000).optional().default(60000),
     });
 
     const {
@@ -735,8 +874,10 @@ export class CharacterTools {
       targets,
       activityIdentifier,
       spellLevel,
+      attackRollMode,
       riderIds,
       riderOptions,
+      timeoutMs,
     } = schema.parse(args);
     const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
 
@@ -746,22 +887,29 @@ export class CharacterTools {
       targets,
       activityIdentifier,
       spellLevel,
+      attackRollMode,
       riderIds,
       riderOptions,
+      timeoutMs,
     });
 
     try {
-      const result = await this.foundryClient.query('foundry-mcp-bridge.useItemOnTargets', {
-        actorIdentifier,
-        itemIdentifier,
-        targets,
-        activityIdentifier,
-        options: {
-          spellLevel,
-          declaredRiders: normalizedDeclaredRiders,
-          arcaneDeclaredRiders: normalizedDeclaredRiders,
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.useItemOnTargets',
+        {
+          actorIdentifier,
+          itemIdentifier,
+          targets,
+          activityIdentifier,
+          options: {
+            spellLevel,
+            attackRollMode,
+            declaredRiders: normalizedDeclaredRiders,
+            arcaneDeclaredRiders: normalizedDeclaredRiders,
+          },
         },
-      });
+        { timeoutMs }
+      );
 
       this.logger.debug('Successfully used item on targets', {
         actorName: result.actorName,
@@ -788,8 +936,10 @@ export class CharacterTools {
       targetTokenIds: z.array(z.string()).min(1, 'At least one target token is required'),
       activityIdentifier: z.string().optional(),
       spellLevel: z.number().optional(),
+      attackRollMode: z.enum(['normal', 'advantage', 'disadvantage']).optional(),
       riderIds: z.array(z.string().trim().min(1, 'Rider id cannot be empty')).default([]),
       riderOptions: z.record(z.record(z.unknown())).default({}),
+      timeoutMs: z.number().int().min(5000).max(300000).optional().default(60000),
     });
 
     const {
@@ -798,8 +948,10 @@ export class CharacterTools {
       targetTokenIds,
       activityIdentifier,
       spellLevel,
+      attackRollMode,
       riderIds,
       riderOptions,
+      timeoutMs,
     } = schema.parse(args);
     const normalizedDeclaredRiders = this.normalizeDeclaredRiders(riderIds, riderOptions);
 
@@ -809,22 +961,30 @@ export class CharacterTools {
       targetTokenIds,
       activityIdentifier,
       spellLevel,
+      attackRollMode,
       riderIds,
       riderOptions,
+      timeoutMs,
     });
 
     try {
-      return await this.foundryClient.query('foundry-mcp-bridge.useItemOnTokenTargets', {
-        sourceTokenId,
-        itemIdentifier,
-        targetTokenIds,
-        activityIdentifier,
-        options: {
-          spellLevel,
-          declaredRiders: normalizedDeclaredRiders,
-          arcaneDeclaredRiders: normalizedDeclaredRiders,
+      return await this.foundryClient.query(
+        'foundry-mcp-bridge.useItemOnTokenTargets',
+        {
+          sourceTokenId,
+          itemIdentifier,
+          targetTokenIds,
+          activityIdentifier,
+          options: {
+            spellLevel,
+            attackRollMode,
+            workflowTimeoutMs: timeoutMs,
+            declaredRiders: normalizedDeclaredRiders,
+            arcaneDeclaredRiders: normalizedDeclaredRiders,
+          },
         },
-      });
+        { timeoutMs }
+      );
     } catch (error) {
       this.logger.error('Failed to use item on token targets', error);
       throw new Error(
@@ -856,6 +1016,80 @@ export class CharacterTools {
         `Failed to get item use result "${itemCardId}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
+      );
+    }
+  }
+
+  async handleListChatMessages(args: any): Promise<any> {
+    const schema = z.object({
+      limit: z.number().int().min(1).max(100).optional().default(20),
+      sinceId: z.string().optional(),
+      sinceTime: z.number().optional(),
+      includeContent: z.boolean().optional().default(false),
+      includeFlags: z.boolean().optional().default(false),
+      includeRolls: z.boolean().optional().default(true),
+    });
+
+    const params = schema.parse(args ?? {});
+    this.logger.info('Listing chat messages', params);
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.listChatMessages', params);
+    } catch (error) {
+      this.logger.error('Failed to list chat messages', error);
+      throw new Error(
+        `Failed to list chat messages: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleGetChatMessage(args: any): Promise<any> {
+    const schema = z.object({
+      messageId: z.string().min(1, 'Message ID cannot be empty'),
+      includeContent: z.boolean().optional().default(true),
+      includeFlags: z.boolean().optional().default(true),
+      includeRolls: z.boolean().optional().default(true),
+    });
+
+    const params = schema.parse(args);
+    this.logger.info('Getting chat message', { messageId: params.messageId });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.getChatMessage', params);
+    } catch (error) {
+      this.logger.error('Failed to get chat message', error);
+      throw new Error(
+        `Failed to get chat message "${params.messageId}": ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleDeleteChatMessages(args: any): Promise<any> {
+    const schema = z.object({
+      messageIds: z.array(z.string().min(1)).optional(),
+      sinceId: z.string().optional(),
+      sinceTime: z.number().optional(),
+      all: z.boolean().optional().default(false),
+      confirmBulkOperation: z.boolean().optional().default(false),
+    });
+
+    const params = schema.parse(args ?? {});
+    this.logger.info('Deleting chat messages', {
+      messageCount: params.messageIds?.length,
+      sinceId: params.sinceId,
+      sinceTime: params.sinceTime,
+      all: params.all,
+      confirmBulkOperation: params.confirmBulkOperation,
+    });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.deleteChatMessages', params);
+    } catch (error) {
+      this.logger.error('Failed to delete chat messages', error);
+      throw new Error(
+        `Failed to delete chat messages: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
