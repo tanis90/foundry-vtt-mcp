@@ -302,7 +302,7 @@ export class CharacterTools {
       {
         name: 'get-item-use-result',
         description:
-          'Get a conservative QA summary for an item use by Foundry chat item card ID. Scans nearby follow-up chat messages and midi-qol/dnd5e flags for source, targets, saves, rolled damage, applied damage, and debug message IDs.',
+          'Get a conservative QA summary for an item use by Foundry chat item card ID. Scans nearby follow-up chat messages and midi-qol/dnd5e flags for source, targets, saves, rolled damage, applied damage, and debug message IDs. If an Arcane damage-summary card exists, damageSummary.segments and damageApplied use that structured summary; otherwise the tool falls back to HP-card undoDamage evidence.',
         inputSchema: {
           type: 'object',
           properties: {

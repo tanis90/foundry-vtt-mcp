@@ -6196,6 +6196,32 @@ export class FoundryDataAccess {
     );
   }
 
+  private extractArcaneDamageSummary(message: any, parentItemCardId?: string): any | null {
+    const arcaneFlags = message?.flags?.[ARCANE_DND5E_MODULE_ID] ?? {};
+    const summary = arcaneFlags.damageSummary;
+    if (!summary || summary.type !== 'damage-summary') return null;
+    if (parentItemCardId && summary.parentItemCardId !== parentItemCardId) return null;
+    const segments = Array.isArray(summary.segments)
+      ? summary.segments.map((segment: any) => ({
+          ...segment,
+          messageId: segment.messageId ?? message?.id,
+          summaryMessageId: message?.id,
+          parentItemCardId: summary.parentItemCardId,
+          parentWorkflowId: summary.parentWorkflowId,
+          applied: segment.applied ?? segment.total,
+          total: segment.total ?? segment.applied,
+        }))
+      : [];
+    return {
+      ...summary,
+      messageId: message?.id,
+      segments,
+      totalApplied:
+        summary.totalApplied ??
+        segments.reduce((sum: number, segment: any) => sum + (Number(segment.applied) || 0), 0),
+    };
+  }
+
   private extractUndoDamageEntries(message: any): any[] {
     const flags = this.getMessageMidiQolDamageFlags(message);
     const undoDamage = flags.undoDamage;
@@ -8628,6 +8654,10 @@ export class FoundryDataAccess {
       itemMessageIndex,
       itemMessageIndex + Math.max(1, scanForward + 1)
     );
+    const damageSummary =
+      relatedMessages
+        .map((message: any) => this.extractArcaneDamageSummary(message, itemCardId))
+        .find((summary: any) => summary && Array.isArray(summary.segments) && summary.segments.length > 0) ?? null;
     const flags = itemMessage.flags ?? {};
     const midiFlags = flags['midi-qol'] ?? {};
     const dnd5eFlags = flags.dnd5e ?? {};
@@ -8637,7 +8667,11 @@ export class FoundryDataAccess {
       : null;
     const sourceActor =
       sourceToken?.actor ?? (speaker.actor ? game.actors?.get(speaker.actor) : null);
-    const targetUuids = this.collectMessageTokenUuids(relatedMessages);
+    const targetUuids = [
+      ...this.collectMessageTokenUuids(relatedMessages),
+      ...((damageSummary?.targetTokenUuids ?? []) as string[]),
+      ...((damageSummary?.segments ?? []).map((segment: any) => segment.targetUuid).filter(Boolean)),
+    ];
     const uniqueTargetUuids = Array.from(new Set(targetUuids.filter(Boolean)));
     const targets = uniqueTargetUuids.map((uuid: string) => {
       const tokenId = uuid.split('.').pop();
@@ -8698,6 +8732,12 @@ export class FoundryDataAccess {
         });
       }
     }
+    if (damageSummary) {
+      damageApplied.length = 0;
+      damageRolled.length = 0;
+      damageApplied.push(...damageSummary.segments);
+      damageRolled.push(...damageSummary.segments);
+    }
     for (const uuid of saveUuidSet) failedSaveUuidSet.delete(uuid);
     const stateDiff: Record<string, any> = {};
     for (const target of targets) {
@@ -8750,6 +8790,7 @@ export class FoundryDataAccess {
       damage: damageApplied,
       damageRolled,
       damageApplied,
+      damageSummary,
       stateDiff,
       item: {
         id: midiFlags.itemId ?? dnd5eFlags.item?.id,
