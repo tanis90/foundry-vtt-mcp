@@ -213,9 +213,9 @@ export class TokenManipulationTools {
         },
       },
       {
-        name: 'toggle-token-condition',
+        name: 'apply-token-state',
         description:
-          'Toggle a status effect/condition on or off for a token. Use this to apply or remove conditions like Prone, Poisoned, Blinded, etc.',
+          'Direct GM fallback for applying token state changes: adjust/set HP or temp HP and add, remove, or toggle conditions in one call.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -223,18 +223,49 @@ export class TokenManipulationTools {
               type: 'string',
               description: 'The ID of the token to modify',
             },
-            conditionId: {
-              type: 'string',
-              description:
-                'The ID of the condition/status effect to toggle (e.g., "prone", "poisoned", "blinded")',
+            hpDelta: {
+              type: 'number',
+              description: 'Relative HP adjustment. Negative damages, positive heals.',
             },
-            active: {
-              type: 'boolean',
-              description:
-                'Optional: true to add the condition, false to remove it. If not specified, will toggle the current state.',
+            hpSet: {
+              type: 'number',
+              description: 'Set current HP directly. Clamped between 0 and max HP.',
+            },
+            tempHpDelta: {
+              type: 'number',
+              description: 'Relative temporary HP adjustment.',
+            },
+            tempHpSet: {
+              type: 'number',
+              description: 'Set temporary HP directly. Clamped to 0 or higher.',
+            },
+            conditions: {
+              type: 'object',
+              description: 'Condition changes to apply to this token.',
+              properties: {
+                add: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Condition IDs/names to add, e.g. ["prone", "poisoned"].',
+                },
+                remove: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Condition IDs/names to remove.',
+                },
+                toggle: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Condition IDs/names to toggle.',
+                },
+              },
+            },
+            note: {
+              type: 'string',
+              description: 'Optional audit note to include in the result and Foundry chat.',
             },
           },
-          required: ['tokenId', 'conditionId'],
+          required: ['tokenId'],
         },
       },
       {
@@ -490,37 +521,43 @@ export class TokenManipulationTools {
     }
   }
 
-  async handleToggleTokenCondition(args: any): Promise<any> {
+  async handleApplyTokenState(args: any): Promise<any> {
     const schema = z.object({
       tokenId: z.string(),
-      conditionId: z.string(),
-      active: z.boolean().optional(),
+      hpDelta: z.number().optional(),
+      hpSet: z.number().optional(),
+      tempHpDelta: z.number().optional(),
+      tempHpSet: z.number().optional(),
+      conditions: z
+        .object({
+          add: z.array(z.string()).optional(),
+          remove: z.array(z.string()).optional(),
+          toggle: z.array(z.string()).optional(),
+        })
+        .optional(),
+      note: z.string().optional(),
     });
 
-    const { tokenId, conditionId, active } = schema.parse(args);
+    const parsed = schema.parse(args);
 
-    this.logger.info('Toggling token condition', { tokenId, conditionId, active });
+    this.logger.info('Applying token state', parsed);
 
     try {
-      const result = await this.foundryClient.query('foundry-mcp-bridge.toggle-token-condition', {
-        tokenId,
-        conditionId,
-        active,
-      });
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.apply-token-state',
+        parsed
+      );
 
-      this.logger.debug('Token condition toggled successfully', { tokenId, conditionId, result });
+      this.logger.debug('Token state applied successfully', { tokenId: parsed.tokenId, result });
 
       return {
         success: true,
-        tokenId,
-        conditionId,
-        isActive: result.isActive,
-        conditionName: result.conditionName,
+        ...result,
       };
     } catch (error) {
-      this.logger.error('Failed to toggle token condition', error);
+      this.logger.error('Failed to apply token state', error);
       throw new Error(
-        `Failed to toggle token condition: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Failed to apply token state: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

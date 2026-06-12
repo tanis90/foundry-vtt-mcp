@@ -1440,7 +1440,7 @@ async function startBackend(): Promise<void> {
     'get-token-details',
     'move-token',
     'update-token',
-    'toggle-token-condition',
+    'apply-token-state',
     'request-player-rolls',
     'use-item',
     'use-item-on-targets',
@@ -1761,8 +1761,8 @@ async function startBackend(): Promise<void> {
 
                   break;
 
-                case 'toggle-token-condition':
-                  result = await tokenManipulationTools.handleToggleTokenCondition(args);
+                case 'apply-token-state':
+                  result = await tokenManipulationTools.handleApplyTokenState(args);
 
                   break;
 

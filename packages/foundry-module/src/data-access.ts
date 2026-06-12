@@ -7801,6 +7801,188 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Apply direct token state changes as a GM fallback when item automation is unavailable.
+   */
+  async applyTokenState(data: {
+    tokenId: string;
+    hpDelta?: number;
+    hpSet?: number;
+    tempHpDelta?: number;
+    tempHpSet?: number;
+    conditions?: {
+      add?: string[];
+      remove?: string[];
+      toggle?: string[];
+    };
+    note?: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('modifyScene', {
+      targetIds: [data.tokenId],
+    });
+
+    if (!permissionCheck.allowed) {
+      throw new Error(`${ERROR_MESSAGES.ACCESS_DENIED}: ${permissionCheck.reason}`);
+    }
+
+    try {
+      const scene = (game.scenes as any).current;
+      if (!scene) {
+        throw new Error('No active scene found');
+      }
+
+      const token = scene.tokens.get(data.tokenId);
+      if (!token) {
+        throw new Error(`Token ${data.tokenId} not found in current scene`);
+      }
+
+      const actor = token.actor;
+      if (!actor) {
+        throw new Error(`Token ${data.tokenId} has no associated actor`);
+      }
+
+      const hp = actor.system?.attributes?.hp;
+      const oldHP = hp
+        ? {
+            value: Number(hp.value ?? 0),
+            max: Number(hp.max ?? 0),
+            temp: Number(hp.temp ?? 0),
+            tempmax: Number(hp.tempmax ?? 0),
+          }
+        : null;
+      const updates: Record<string, number> = {};
+
+      if (oldHP) {
+        if (typeof data.hpSet === 'number') {
+          updates['system.attributes.hp.value'] = Math.max(0, Math.min(oldHP.max, data.hpSet));
+        } else if (typeof data.hpDelta === 'number') {
+          updates['system.attributes.hp.value'] = Math.max(
+            0,
+            Math.min(oldHP.max, oldHP.value + data.hpDelta)
+          );
+        }
+
+        if (typeof data.tempHpSet === 'number') {
+          updates['system.attributes.hp.temp'] = Math.max(0, data.tempHpSet);
+        } else if (typeof data.tempHpDelta === 'number') {
+          updates['system.attributes.hp.temp'] = Math.max(0, oldHP.temp + data.tempHpDelta);
+        }
+      }
+
+      if (Object.keys(updates).length) {
+        await actor.update(updates);
+      }
+
+      const conditionChanges: any[] = [];
+      const addConditions = data.conditions?.add ?? [];
+      const removeConditions = data.conditions?.remove ?? [];
+      const toggleConditions = data.conditions?.toggle ?? [];
+      const isConditionActive = (conditionId: string): boolean =>
+        Array.from(actor.effects?.contents ?? []).some((effect: any) => {
+          if (effect.statuses?.has(conditionId)) return true;
+          if (effect.name?.toLowerCase() === conditionId.toLowerCase()) return true;
+          if (effect.label?.toLowerCase() === conditionId.toLowerCase()) return true;
+          return false;
+        });
+
+      for (const conditionId of addConditions) {
+        if (isConditionActive(conditionId)) {
+          conditionChanges.push({ conditionId, action: 'add', active: true, skipped: true });
+          continue;
+        }
+        const result = await this.toggleTokenCondition({
+          tokenId: data.tokenId,
+          conditionId,
+          active: true,
+        });
+        conditionChanges.push({ conditionId, action: 'add', active: result.active });
+      }
+      for (const conditionId of removeConditions) {
+        if (!isConditionActive(conditionId)) {
+          conditionChanges.push({ conditionId, action: 'remove', active: false, skipped: true });
+          continue;
+        }
+        const result = await this.toggleTokenCondition({
+          tokenId: data.tokenId,
+          conditionId,
+          active: false,
+        });
+        conditionChanges.push({ conditionId, action: 'remove', active: result.active });
+      }
+      for (const conditionId of toggleConditions) {
+        const currentlyActive = isConditionActive(conditionId);
+        const result = await this.toggleTokenCondition({
+          tokenId: data.tokenId,
+          conditionId,
+          active: !currentlyActive,
+        });
+        conditionChanges.push({ conditionId, action: 'toggle', active: result.active });
+      }
+
+      const nextHp = actor.system?.attributes?.hp;
+      const newHP = nextHp
+        ? {
+            value: Number(nextHp.value ?? 0),
+            max: Number(nextHp.max ?? 0),
+            temp: Number(nextHp.temp ?? 0),
+            tempmax: Number(nextHp.tempmax ?? 0),
+          }
+        : null;
+      const effects = (actor.effects?.contents ?? []).map((effect: any) => ({
+        id: effect.id,
+        name: effect.name,
+        statuses: Array.from(effect.statuses ?? []),
+        disabled: effect.disabled,
+      }));
+
+      if (data.note || Object.keys(updates).length || conditionChanges.length) {
+        await ChatMessage.create({
+          speaker: ChatMessage.getSpeaker({ token: token.object, actor }),
+          content:
+            `<p><strong>GM State Adjustment:</strong> ${token.name}</p>` +
+            (oldHP && newHP
+              ? `<p>HP: ${oldHP.value} -> ${newHP.value}; Temp HP: ${oldHP.temp} -> ${newHP.temp}</p>`
+              : '') +
+            (conditionChanges.length
+              ? `<p>Conditions: ${conditionChanges
+                  .map(change => `${change.action} ${change.conditionId} (${change.active ? 'active' : 'inactive'})`)
+                  .join(', ')}</p>`
+              : '') +
+            (data.note ? `<p>${data.note}</p>` : ''),
+        });
+      }
+
+      this.auditLog('applyTokenState', data, 'success');
+
+      return {
+        success: true,
+        tokenId: token.id,
+        tokenName: token.name,
+        actorId: actor.id,
+        oldHP,
+        newHP,
+        hpDelta:
+          oldHP && newHP ? { value: newHP.value - oldHP.value, temp: newHP.temp - oldHP.temp } : null,
+        conditions: conditionChanges,
+        effects,
+        note: data.note,
+        message: `Applied state changes to ${token.name}`,
+      };
+    } catch (error) {
+      this.auditLog(
+        'applyTokenState',
+        data,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      throw new Error(
+        `Failed to apply token state: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
    * Get all available conditions for the current game system
    */
   async getAvailableConditions(): Promise<any> {

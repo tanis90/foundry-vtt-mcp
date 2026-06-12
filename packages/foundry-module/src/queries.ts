@@ -94,6 +94,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.updateToken`] = this.handleUpdateToken.bind(this);
     CONFIG.queries[`${modulePrefix}.deleteTokens`] = this.handleDeleteTokens.bind(this);
     CONFIG.queries[`${modulePrefix}.getTokenDetails`] = this.handleGetTokenDetails.bind(this);
+    CONFIG.queries[`${modulePrefix}.applyTokenState`] =
+      this.handleApplyTokenState.bind(this);
     CONFIG.queries[`${modulePrefix}.toggleTokenCondition`] =
       this.handleToggleTokenCondition.bind(this);
     CONFIG.queries[`${modulePrefix}.getAvailableConditions`] =
@@ -140,6 +142,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.update-token`] = this.handleUpdateToken.bind(this);
     CONFIG.queries[`${modulePrefix}.delete-tokens`] = this.handleDeleteTokens.bind(this);
     CONFIG.queries[`${modulePrefix}.get-token-details`] = this.handleGetTokenDetails.bind(this);
+    CONFIG.queries[`${modulePrefix}.apply-token-state`] =
+      this.handleApplyTokenState.bind(this);
     CONFIG.queries[`${modulePrefix}.toggle-token-condition`] =
       this.handleToggleTokenCondition.bind(this);
     CONFIG.queries[`${modulePrefix}.get-available-conditions`] =
@@ -1450,6 +1454,43 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to toggle token condition: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle direct token state changes.
+   */
+  private async handleApplyTokenState(data: {
+    tokenId: string;
+    hpDelta?: number;
+    hpSet?: number;
+    tempHpDelta?: number;
+    tempHpSet?: number;
+    conditions?: {
+      add?: string[];
+      remove?: string[];
+      toggle?: string[];
+    };
+    note?: string;
+  }): Promise<any> {
+    try {
+      // SECURITY: Silent GM validation
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.tokenId) {
+        throw new Error('tokenId is required');
+      }
+
+      return await this.dataAccess.applyTokenState(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to apply token state: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
