@@ -179,7 +179,7 @@ export class CharacterTools {
       {
         name: 'use-item-on-targets',
         description:
-          'Use an item against explicit current-scene token targets and require those targets to enter the automated workflow. Actor or current-scene source token using the item (name or ID). For combat, prefer use-item-on-token-targets with a source token ID. Requires targets. Supports ["self"] for self-targeted effects. If an item has multiple usable activities, pass activityIdentifier instead of guessing.',
+          'Use an item against explicit current-scene token targets and require those targets to enter the automated workflow. Actor or current-scene source token using the item (name or ID). For combat, prefer use-item-on-token-targets with a source token ID. Requires targets. Supports ["self"] for self-targeted effects. If an item has multiple usable activities, pass activityIdentifier instead of guessing. Returned damage is conservative: damageRolled is candidate rolled damage, damageApplied is confirmed applied damage, and damage is kept as an applied-damage alias.',
         inputSchema: {
           type: 'object',
           properties: {

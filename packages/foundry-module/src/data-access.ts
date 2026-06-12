@@ -1,6 +1,7 @@
 import { MODULE_ID, ERROR_MESSAGES, TOKEN_DISPOSITIONS } from './constants.js';
 import { permissionManager } from './permissions.js';
 import { transactionManager } from './transaction-manager.js';
+const ARCANE_DND5E_MODULE_ID = 'arcane-dnd5e-2014-automation';
 // Local type definitions to avoid shared package import issues
 interface CharacterInfo {
   id: string;
@@ -6178,10 +6179,62 @@ export class FoundryDataAccess {
     return message?.flags?.['midi-qol'] ?? {};
   }
 
+  private getMessageMidiQolDamageFlags(message: any): any {
+    return message?.flags?.midiqol ?? message?.flags?.['midiqol'] ?? message?.flags?.['midi-qol'] ?? {};
+  }
+
+  private getMessageArcaneFlags(message: any): any {
+    const direct = message?.flags?.[ARCANE_DND5E_MODULE_ID];
+    if (direct) return direct;
+    const midiFlags = this.getMessageMidiFlags(message);
+    const dnd5eFlags = message?.flags?.dnd5e ?? {};
+    return (
+      midiFlags?.item?.flags?.[ARCANE_DND5E_MODULE_ID] ??
+      dnd5eFlags?.item?.flags?.[ARCANE_DND5E_MODULE_ID] ??
+      message?.item?.flags?.[ARCANE_DND5E_MODULE_ID] ??
+      {}
+    );
+  }
+
+  private extractUndoDamageEntries(message: any): any[] {
+    const flags = this.getMessageMidiQolDamageFlags(message);
+    const undoDamage = flags.undoDamage;
+    if (!Array.isArray(undoDamage)) return [];
+    const arcaneFlags = this.getMessageArcaneFlags(message);
+    return undoDamage.flatMap((entry: any) => {
+      const details = Array.isArray(entry?.damageDetail) && entry.damageDetail.length > 0
+        ? entry.damageDetail
+        : Array.isArray(entry?.rawDamageDetail) && entry.rawDamageDetail.length > 0
+          ? entry.rawDamageDetail
+          : [entry?.damageItem ?? entry];
+      return details.map((detail: any) => ({
+        ...detail,
+        type: detail?.type ?? detail?.damageType ?? arcaneFlags.damageType,
+        formula: detail?.formula,
+        total: detail?.damage ?? detail?.value ?? entry?.totalDamage ?? entry?.hpDamage,
+        applied: detail?.damage ?? detail?.value ?? entry?.totalDamage ?? entry?.hpDamage,
+        targetUuid: entry?.targetUuid ?? entry?.tokenUuid,
+        actorUuid: entry?.actorUuid,
+        oldHP: entry?.oldHP,
+        newHP: entry?.newHP,
+        oldTempHP: entry?.oldTempHP,
+        newTempHP: entry?.newTempHP,
+        messageId: message?.id,
+        role: arcaneFlags.damageRole,
+        riderId: arcaneFlags.riderId,
+        parentWorkflowId: arcaneFlags.parentWorkflowId,
+        parentItemCardId: arcaneFlags.parentItemCardId,
+        sourceEffectUuid: arcaneFlags.sourceEffectUuid,
+        resource: arcaneFlags.resource,
+      }));
+    });
+  }
+
   private collectMessageTokenUuids(messages: any[]): string[] {
     const values: string[] = [];
     for (const message of messages) {
       const midiFlags = this.getMessageMidiFlags(message);
+      const midiQolFlags = this.getMessageMidiQolDamageFlags(message);
       for (const key of [
         'targetUuids',
         'hitTargetUuids',
@@ -6192,6 +6245,11 @@ export class FoundryDataAccess {
       ]) {
         const raw = midiFlags[key];
         if (Array.isArray(raw)) values.push(...raw.filter(Boolean).map(String));
+      }
+      for (const entry of midiQolFlags.undoDamage ?? []) {
+        if (entry?.targetUuid) values.push(String(entry.targetUuid));
+        if (entry?.tokenUuid) values.push(String(entry.tokenUuid));
+        if (entry?.actorUuid) values.push(String(entry.actorUuid));
       }
     }
     return Array.from(new Set(values));
@@ -8596,9 +8654,14 @@ export class FoundryDataAccess {
     const damageRolled: any[] = [];
     const damageApplied: any[] = [];
     const attacks: any[] = [];
+    const hasAppliedHpCards = relatedMessages.some((message: any) =>
+      this.extractUndoDamageEntries(message).length > 0
+    );
 
     for (const message of relatedMessages) {
       const messageMidiFlags = this.getMessageMidiFlags(message);
+      const messageArcaneFlags = this.getMessageArcaneFlags(message);
+      const undoDamageEntries = this.extractUndoDamageEntries(message);
       for (const uuid of messageMidiFlags.failedSaveUuids ?? [])
         failedSaveUuidSet.add(String(uuid));
       for (const uuid of messageMidiFlags.saveUuids ?? []) saveUuidSet.add(String(uuid));
@@ -8607,12 +8670,24 @@ export class FoundryDataAccess {
         const entries = messageDamage.map((entry: any) => ({
             ...entry,
             messageId: message.id,
+            role: messageArcaneFlags.damageRole,
+            riderId: messageArcaneFlags.riderId,
+            parentWorkflowId: messageArcaneFlags.parentWorkflowId,
+            parentItemCardId: messageArcaneFlags.parentItemCardId,
+            sourceEffectUuid: messageArcaneFlags.sourceEffectUuid,
+            resource: messageArcaneFlags.resource,
           }));
         damageRolled.push(...entries);
         const messageTargets = this.collectMessageTokenUuids([message]).filter(Boolean);
         const isExplicitMiss = messageMidiFlags.isHit === false;
-        if (!isExplicitMiss && messageTargets.length > 0) {
+        if (!hasAppliedHpCards && !isExplicitMiss && messageTargets.length > 0 && undoDamageEntries.length === 0) {
           damageApplied.push(...entries);
+        }
+      }
+      if (undoDamageEntries.length > 0) {
+        damageApplied.push(...undoDamageEntries);
+        if (!Array.isArray(messageDamage) || messageDamage.length === 0) {
+          damageRolled.push(...undoDamageEntries);
         }
       }
       if (messageMidiFlags.attackTotal !== undefined || messageMidiFlags.isHit !== undefined) {
@@ -8635,6 +8710,7 @@ export class FoundryDataAccess {
     return {
       status:
         relatedMessages.length > 1 ||
+        attacks.length > 0 ||
         damageRolled.length > 0 ||
         saveUuidSet.size > 0 ||
         failedSaveUuidSet.size > 0
